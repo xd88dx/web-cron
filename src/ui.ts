@@ -190,7 +190,11 @@ function hdr(){ var h={'Content-Type':'application/json'}, p=localStorage.getIte
 function toast(msg){ var t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove('show');},2600); }
 async function api(path, opts){
   opts = opts || {};
-  opts.headers = Object.assign({}, hdr(), opts.headers || {});
+  // 无 body 的请求不要声明 application/json：Fastify 会对「声明 JSON 却空 body」
+  // 抛 FST_ERR_CTP_EMPTY_JSON_BODY，导致立即执行 / 启停 / 删除按钮 400。
+  var h = hdr();
+  if(!opts.body) delete h['Content-Type'];
+  opts.headers = Object.assign({}, h, opts.headers || {});
   var r = await fetch(path, opts);
   if(r.status===401){ $('loginOverlay').classList.add('show'); throw new Error('unauthorized'); }
   var d = await r.json().catch(function(){return {};});

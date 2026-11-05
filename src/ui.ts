@@ -1,0 +1,375 @@
+// ui.ts —— 管理面板 HTML（内嵌，无需静态资源）
+// 来源：worker/src/ui.js，增加双模式表单、浏览器能力提示、日志详情字段。
+// 外层 String.raw 模板，内部禁止出现反引号与 ${，前端 JS 一律字符串拼接。
+export const HTML = String.raw`<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CronWeb · 多功能定时任务调度器</title>
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--line:#e5e9f2;--txt:#1f2937;--muted:#6b7280;--blue:#2563eb;--purple:#7c3aed;--purple-bg:#f5f3ff;--green:#16a34a;--green-bg:#f0fdf4;--red:#dc2626;--red-bg:#fef2f2;--amber:#b45309;--amber-bg:#fffbeb;--gray-bg:#f3f4f6;--shadow:0 1px 3px rgba(16,24,40,.08)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--txt);font-size:14px}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20;gap:12px;flex-wrap:wrap}
+.brand{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+.brand small{color:var(--muted);font-weight:400;font-size:12px}
+.hd-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.bstatus{font-size:12px;padding:5px 10px;border-radius:999px;font-weight:600;white-space:nowrap}
+.bstatus.yes{background:var(--green-bg);color:var(--green)}
+.bstatus.no{background:var(--amber-bg);color:var(--amber)}
+button{cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--txt);border-radius:8px;padding:7px 14px;font-size:13px;transition:.15s}
+button:hover{border-color:var(--blue);color:var(--blue)}
+button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+button.primary:hover{background:#1d4ed8;color:#fff}
+button.danger:hover{border-color:var(--red);color:var(--red)}
+button.icon{padding:6px 9px;font-size:14px;line-height:1}
+button.mini{padding:3px 8px;font-size:11px}
+main{max-width:1280px;margin:0 auto;padding:20px 24px}
+.banner{background:var(--amber-bg);border:1px solid #fde68a;color:var(--amber);border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
+.stat .v{font-size:24px;font-weight:700;margin-top:4px}
+.stat .l{color:var(--muted);font-size:12px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;color:var(--muted);text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);background:#fafbfd;font-weight:600}
+td{padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbfd}
+.tname{font-weight:600}
+.turl{color:var(--muted);font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.badge.on{background:var(--green-bg);color:var(--green)}
+.badge.off{background:var(--gray-bg);color:var(--muted)}
+.badge.ok{background:var(--green-bg);color:var(--green)}
+.badge.fail{background:var(--red-bg);color:var(--red)}
+.badge.idle{background:var(--gray-bg);color:var(--muted)}
+.badge.http{background:#eff6ff;color:#1d4ed8}
+.badge.browser{background:var(--purple-bg);color:var(--purple)}
+.badge.challenge{background:var(--red-bg);color:var(--red)}
+.muted{color:var(--muted);font-size:12px}
+.ops{display:flex;gap:6px;justify-content:flex-end}
+.empty{text-align:center;padding:48px 0;color:var(--muted)}
+.empty .big{font-size:36px;margin-bottom:8px}
+.overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
+.overlay.show{display:flex}
+.modal{background:var(--card);border-radius:14px;width:100%;max-width:620px;max-height:90vh;overflow:auto;padding:22px 24px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.modal h3{margin-bottom:16px;font-size:16px}
+.frow{margin-bottom:12px}
+.frow label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-weight:600}
+.frow input,.frow select,.frow textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;background:#fff;color:var(--txt)}
+.frow textarea{resize:vertical;min-height:60px}
+.frow input[type=checkbox]{width:auto;margin-right:6px}
+.checkline{display:flex;align-items:center;font-size:13px;gap:2px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.fieldset{border:1px dashed var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:#fcfcff}
+.fieldset legend{font-size:12px;font-weight:700;color:var(--purple);padding:0 6px}
+.mfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.err{color:var(--red);font-size:12px;min-height:16px;margin-top:6px}
+.histok{color:var(--green);font-weight:700}
+.histfail{color:var(--red);font-weight:700}
+.snippet{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;color:var(--muted);white-space:pre-wrap;word-break:break-all;margin-top:4px;max-height:100px;overflow:auto}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:99}
+#toast.show{opacity:1}
+.login-box{max-width:340px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">⏰ CronWeb <small>多功能定时任务调度器 · Node 版</small></div>
+  <div class="hd-actions">
+    <span id="bStatus" class="bstatus no">浏览器仿真：探测中…</span>
+    <button id="btnExport">导出备份</button>
+    <button id="btnImport">导入备份</button>
+    <button id="btnLogout" class="hidden">退出登录</button>
+    <button id="btnNew" class="primary">＋ 新建任务</button>
+  </div>
+</header>
+<main>
+  <div class="banner hidden" id="degradeBox"></div>
+  <section class="stats">
+    <div class="stat"><div class="l">任务总数</div><div class="v" id="stTasks">-</div></div>
+    <div class="stat"><div class="l">运行中</div><div class="v" id="stEnabled">-</div></div>
+    <div class="stat"><div class="l">24h 成功率</div><div class="v" id="stRate">-</div></div>
+    <div class="stat"><div class="l">24h 执行次数</div><div class="v" id="stRuns">-</div></div>
+  </section>
+  <section class="panel">
+    <table>
+      <thead><tr>
+        <th style="width:76px">状态</th><th>任务</th><th style="width:88px">方式</th>
+        <th style="width:150px">调度规则</th><th style="width:180px">上次执行</th>
+        <th style="width:150px">下次执行</th><th style="width:200px;text-align:right">操作</th>
+      </tr></thead>
+      <tbody id="taskBody"></tbody>
+    </table>
+    <div class="empty hidden" id="emptyBox"><div class="big">📭</div>还没有任务，点击右上角「新建任务」添加第一个定时访问任务</div>
+  </section>
+</main>
+
+<div class="overlay" id="editOverlay">
+  <div class="modal">
+    <h3 id="editTitle">新建任务</h3>
+    <div class="frow"><label>任务名称 *</label><input id="fName" placeholder="例：站点保活"></div>
+    <div class="frow"><label>访问地址 URL *</label><input id="fUrl" placeholder="https://example.com/ping"></div>
+    <div class="grid3">
+      <div class="frow"><label>请求方法</label><select id="fMethod"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>HEAD</option><option>PATCH</option></select></div>
+      <div class="frow"><label>超时（秒，1-120）</label><input id="fTimeout" type="number" value="30" min="1" max="120"></div>
+      <div class="frow"><label>失败重试（0-5）</label><input id="fRetries" type="number" value="0" min="0" max="5"></div>
+    </div>
+    <div class="frow"><label>访问方式 *</label>
+      <select id="fMode" onchange="onModeChange()">
+        <option value="http">🌐 HTTP 请求（普通站点，轻量快速）</option>
+        <option value="browser">🧭 浏览器仿真（个别有反爬的站点，真实 Chromium）</option>
+      </select>
+    </div>
+    <div class="frow" id="fallbackBox"><label class="checkline"><input type="checkbox" id="fFallback"> HTTP 遇 403/429/503 或挑战页时，自动升级为浏览器仿真重试一次</label></div>
+    <div class="fieldset hidden" id="browserBox">
+      <legend>🧭 浏览器仿真选项</legend>
+      <div class="grid2">
+        <div class="frow"><label>导航等待策略</label><select id="fWaitUntil"><option value="domcontentloaded">domcontentloaded</option><option value="load">load</option><option value="networkidle">networkidle</option><option value="commit">commit</option></select></div>
+        <div class="frow"><label>额外停留（毫秒，0-30000，随机化模拟阅读）</label><input id="fDwell" type="number" value="0" min="0" max="30000"></div>
+      </div>
+      <div class="frow"><label>等待元素出现（CSS 选择器，可选）</label><input id="fWaitSelector" placeholder="#app / .content"></div>
+      <div class="frow"><label>成功断言（可选；CSS 选择器 / text:包含文本 / js:表达式）</label><input id="fAssert" placeholder="text:欢迎 或 #dashboard 或 js:document.title.includes('OK')"></div>
+      <div class="grid2">
+        <div class="frow"><label>任务级代理（可选）</label><input id="fProxy" placeholder="socks5://127.0.0.1:1080"></div>
+        <div class="frow"><label>固定 User-Agent（留空则按任务自动分配）</label><input id="fUa" placeholder="留空即可"></div>
+      </div>
+      <div class="frow"><label class="checkline"><input type="checkbox" id="fScreenshot"> 失败或遇到挑战页时保存截图</label></div>
+      <div class="muted">每个任务独立保存 Cookie / localStorage（storageState），跨次访问表现为回头客；共享一个常驻 Chromium，并发上限由服务端控制。</div>
+    </div>
+    <div class="frow"><label>调度方式</label>
+      <select id="fStype" onchange="document.getElementById('intervalBox').classList.toggle('hidden',this.value!=='interval');document.getElementById('cronBox').classList.toggle('hidden',this.value!=='cron')">
+        <option value="interval">固定间隔（每 N 分钟）</option><option value="cron">Cron 表达式（分 时 日 月 周）</option>
+      </select>
+    </div>
+    <div class="grid2">
+      <div class="frow" id="intervalBox"><label>间隔（分钟，≥1）</label><input id="fInterval" type="number" value="5" min="1"></div>
+      <div class="frow hidden" id="cronBox"><label>Cron 表达式（5 段式，按设置时区判定）</label><input id="fCron" placeholder="*/5 * * * *"></div>
+    </div>
+    <div class="frow"><label>请求头（每行 Key: Value，或 JSON 对象，可覆盖默认浏览器头）</label><textarea id="fHeaders" placeholder="Authorization: Bearer xxx"></textarea></div>
+    <div class="frow"><label>请求体 Body（非 GET 时生效，可选）</label><textarea id="fBody" placeholder="{&quot;keepalive&quot;: true}"></textarea></div>
+    <div class="err" id="editErr"></div>
+    <div class="mfoot"><button onclick="closeEdit()">取消</button><button class="primary" id="btnSave">保存</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="logOverlay">
+  <div class="modal" style="max-width:860px">
+    <h3 id="logTitle">执行日志</h3>
+    <div id="logBody"></div>
+    <div class="mfoot"><button onclick="document.getElementById('logOverlay').classList.remove('show')">关闭</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="loginOverlay">
+  <div class="modal login-box">
+    <h3>🔐 CronWeb 管理登录</h3>
+    <div class="frow"><label>访问密码</label><input id="loginPwd" type="password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <div class="err" id="loginErr"></div>
+    <div class="mfoot"><button class="primary" onclick="doLogin()">登录</button></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<input type="file" id="importFile" accept=".json" class="hidden">
+
+<script>
+let TASKS = [], TZ = 'Asia/Shanghai', editingId = null;
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function fmt(ts){
+  if(!ts) return '';
+  try{ return new Intl.DateTimeFormat('zh-CN',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(ts)).replace(/\//g,'-'); }
+  catch(e){ return new Date(ts).toISOString(); }
+}
+function hdr(){ var h={'Content-Type':'application/json'}, p=localStorage.getItem('cw_pwd'); if(p) h['X-Auth']=p; return h; }
+function toast(msg){ var t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove('show');},2600); }
+async function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({}, hdr(), opts.headers || {});
+  var r = await fetch(path, opts);
+  if(r.status===401){ $('loginOverlay').classList.add('show'); throw new Error('unauthorized'); }
+  var d = await r.json().catch(function(){return {};});
+  if(!r.ok) throw new Error(d.error || ('HTTP '+r.status));
+  return d;
+}
+async function doLogin(){
+  try{
+    var r = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('loginPwd').value})});
+    if(!r.ok) throw new Error('bad');
+    localStorage.setItem('cw_pwd',$('loginPwd').value);
+    $('loginOverlay').classList.remove('show'); $('loginErr').textContent=''; load();
+  }catch(e){ $('loginErr').textContent='密码错误'; }
+}
+function onModeChange(){
+  var b=$('fMode').value==='browser';
+  $('browserBox').classList.toggle('hidden',!b);
+  $('fallbackBox').classList.toggle('hidden',b);
+}
+function schedText(t){ return t.schedule_type==='cron' ? 'cron: '+t.cron_expr : '每 '+t.interval_minutes+' 分钟'; }
+function modeBadge(t){
+  if(t.mode==='browser') return '<span class="badge browser" title="真实 Chromium 仿真">🧭 浏览器</span>';
+  return '<span class="badge http" title="纯 HTTP 请求">🌐 HTTP</span>'+(t.http_fallback_browser?'<div class="muted">可自动升级</div>':'');
+}
+function lastBadge(t){
+  if(t.last_run_at == null) return '<span class="badge idle">未运行</span>';
+  if(t.last_ok===1) return '<span class="badge ok">✓ '+(t.last_status_code==null?'-':t.last_status_code)+' · '+t.last_duration_ms+'ms</span>';
+  return '<span class="badge fail" title="'+esc(t.last_error||'')+'">✗ '+(t.last_status_code==null?'-':t.last_status_code)+' · '+esc(t.last_error||'失败')+'</span>';
+}
+function render(d){
+  TASKS = d.tasks; TZ = d.timezone || 'Asia/Shanghai';
+  if(d.auth_required) $('btnLogout').classList.remove('hidden');
+  var bs=$('bStatus');
+  if(d.browser_available){
+    bs.className='bstatus yes'; bs.textContent='🧭 浏览器仿真：可用'+(d.browser_running?'（运行中）':'（空闲）');
+    $('degradeBox').classList.add('hidden');
+  }else{
+    bs.className='bstatus no'; bs.textContent='🌐 浏览器仿真：不可用（已降级）';
+    var box=$('degradeBox');
+    box.innerHTML='⚠️ 当前环境不具备浏览器仿真能力，浏览器模式的任务会自动降级为 HTTP 请求。<br>原因：'+esc(d.browser_reason||'未探测')+'。部署带 Chromium 的 Docker 镜像即可启用完整功能。';
+    box.classList.remove('hidden');
+  }
+  var s=d.stats;
+  $('stTasks').textContent=s.tasks; $('stEnabled').textContent=s.enabled;
+  $('stRate').textContent=(s.rate24==null?'—':s.rate24+'%'); $('stRuns').textContent=s.runs24;
+  $('taskBody').innerHTML = d.tasks.map(function(t){
+    return '<tr>'+
+      '<td>'+(t.enabled?'<span class="badge on">● 运行中</span>':'<span class="badge off">⏸ 已暂停</span>')+'</td>'+
+      '<td><span class="tname">'+esc(t.name)+'</span><span class="turl" title="'+esc(t.url)+'">'+esc(t.method)+' '+esc(t.url)+'</span></td>'+
+      '<td>'+modeBadge(t)+'</td>'+
+      '<td>'+esc(schedText(t))+(t.retries>0?'<div class="muted">失败重试 '+t.retries+' 次</div>':'')+'</td>'+
+      '<td>'+lastBadge(t)+'<div class="muted">'+esc(fmt(t.last_run_at))+'</div>'+(t.last_challenge?'<span class="badge challenge">挑战页</span>':'')+'</td>'+
+      '<td class="muted">'+(t.enabled?esc(fmt(t.next_run_at)||'等待调度'):'—')+'</td>'+
+      '<td><div class="ops">'+
+        '<button class="icon" title="立即执行" onclick="runNow('+t.id+')">▶</button>'+
+        '<button class="icon" title="'+(t.enabled?'暂停':'启动')+'" onclick="toggleTask('+t.id+')">'+(t.enabled?'⏸':'▶︎')+'</button>'+
+        '<button class="icon" title="执行日志" onclick="showLog('+t.id+')">📜</button>'+
+        '<button class="icon" title="编辑" onclick="openEdit('+t.id+')">✏️</button>'+
+        '<button class="icon danger" title="删除" onclick="delTask('+t.id+')">🗑</button>'+
+      '</div></td></tr>';
+  }).join('');
+  $('emptyBox').classList.toggle('hidden', d.tasks.length>0);
+}
+async function load(){
+  try{ render(await api('/api/tasks')); }
+  catch(e){ if(e.message!=='unauthorized') toast('加载失败: '+e.message); }
+}
+function taskById(id){ return TASKS.find(function(t){return t.id===id;}) || {}; }
+function openEdit(id){
+  editingId=id; $('editErr').textContent=''; $('editTitle').textContent=id?'编辑任务':'新建任务';
+  var t=taskById(id);
+  $('fName').value=t.name||''; $('fUrl').value=t.url||''; $('fMethod').value=t.method||'GET';
+  $('fTimeout').value=t.timeout_seconds==null?30:t.timeout_seconds;
+  $('fRetries').value=t.retries==null?0:t.retries;
+  $('fStype').value=t.schedule_type||'interval';
+  $('fInterval').value=t.interval_minutes==null?5:t.interval_minutes;
+  $('fCron').value=t.cron_expr||''; $('fHeaders').value=t.headers||''; $('fBody').value=t.body||'';
+  $('fMode').value=t.mode||'http';
+  $('fWaitUntil').value=t.browser_wait_until||'domcontentloaded';
+  $('fWaitSelector').value=t.browser_wait_selector||'';
+  $('fAssert').value=t.browser_assert||'';
+  $('fDwell').value=t.browser_dwell_ms==null?0:t.browser_dwell_ms;
+  $('fProxy').value=t.browser_proxy||''; $('fUa').value=t.browser_ua||'';
+  $('fScreenshot').checked=!!t.browser_screenshot;
+  $('fFallback').checked=!!t.http_fallback_browser;
+  $('fStype').dispatchEvent(new Event('change'));
+  onModeChange();
+  $('editOverlay').classList.add('show');
+}
+function closeEdit(){ $('editOverlay').classList.remove('show'); editingId=null; }
+function save(){
+  var payload={ name:$('fName').value, url:$('fUrl').value, method:$('fMethod').value,
+    timeout_seconds:+$('fTimeout').value, retries:+$('fRetries').value,
+    schedule_type:$('fStype').value, interval_minutes:+$('fInterval').value,
+    cron_expr:$('fCron').value, headers:$('fHeaders').value, body:$('fBody').value,
+    mode:$('fMode').value, browser_wait_until:$('fWaitUntil').value,
+    browser_wait_selector:$('fWaitSelector').value, browser_assert:$('fAssert').value,
+    browser_dwell_ms:+$('fDwell').value, browser_proxy:$('fProxy').value,
+    browser_ua:$('fUa').value, browser_screenshot:$('fScreenshot').checked?1:0,
+    http_fallback_browser:$('fFallback').checked?1:0 };
+  api(editingId?'/api/tasks/'+editingId:'/api/tasks',{method:editingId?'PUT':'POST',body:JSON.stringify(payload)})
+    .then(function(){ closeEdit(); toast('已保存'); load(); })
+    .catch(function(e){ $('editErr').textContent=e.message; });
+}
+async function runNow(id){
+  toast('正在执行…');
+  try{
+    var r=await api('/api/tasks/'+id+'/run',{method:'POST'});
+    if(r.result.ok) toast('✓ 成功 · '+r.result.mode+' · HTTP '+r.result.status_code+' · '+r.result.duration_ms+'ms');
+    else toast('✗ 失败 · '+(r.result.error||('HTTP '+r.result.status_code)));
+    load();
+  }catch(e){ toast('执行失败: '+e.message); }
+}
+async function toggleTask(id){ try{ await api('/api/tasks/'+id+'/toggle',{method:'POST'}); load(); }catch(e){ toast(e.message); } }
+async function delTask(id){
+  var t=taskById(id);
+  if(!confirm('确定删除任务「'+t.name+'」？其执行历史也将删除。')) return;
+  try{ await api('/api/tasks/'+id,{method:'DELETE'}); toast('已删除'); load(); }catch(e){ toast(e.message); }
+}
+function shotBtn(name){ return '<button class="mini" onclick="viewShot(\''+esc(name)+'\')">查看截图</button>'; }
+async function viewShot(name){
+  try{
+    var r=await fetch('/api/screenshot?name='+encodeURIComponent(name),{headers:hdr()});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var url=URL.createObjectURL(await r.blob()); window.open(url,'_blank');
+    setTimeout(function(){URL.revokeObjectURL(url);},60000);
+  }catch(e){ toast('截图读取失败: '+e.message); }
+}
+async function showLog(id){
+  var t=taskById(id);
+  $('logTitle').textContent='📜 执行日志 — '+t.name;
+  $('logBody').innerHTML='<div class="muted">加载中…</div>';
+  $('logOverlay').classList.add('show');
+  try{
+    var r=await api('/api/tasks/'+id+'/history?limit=50');
+    $('logBody').innerHTML = r.history.length===0 ? '<div class="empty">暂无执行记录</div>' :
+      '<table><thead><tr><th>时间</th><th>结果</th><th>方式</th><th>状态/耗时</th><th>详情</th></tr></thead><tbody>'+
+      r.history.map(function(h){
+        var detail='<div class="muted">'+esc(h.note||'')+'</div>';
+        if(h.final_url) detail+='<div class="muted">最终 URL: '+esc(h.final_url)+'</div>';
+        if(h.page_title) detail+='<div class="muted">标题: '+esc(h.page_title)+'</div>';
+        if(h.error) detail+='<div class="muted" style="color:var(--red)">'+esc(h.error)+'</div>';
+        if(h.challenge) detail+='<span class="badge challenge">挑战页</span> ';
+        if(h.degraded) detail+='<span class="badge off">已降级</span> ';
+        if(h.screenshot) detail+=shotBtn(h.screenshot);
+        if(h.snippet) detail+='<div class="snippet">'+esc(h.snippet)+'</div>';
+        return '<tr><td class="muted" style="white-space:nowrap">'+esc(fmt(h.run_at))+'</td>'+
+          '<td>'+(h.ok?'<span class="histok">成功</span>':'<span class="histfail">失败</span>')+'</td>'+
+          '<td>'+(h.mode==='browser'?'<span class="badge browser">🧭 浏览器</span>':'<span class="badge http">🌐 HTTP</span>')+'</td>'+
+          '<td class="muted">'+(h.status_code==null?'-':h.status_code)+'<br>'+h.duration_ms+'ms</td>'+
+          '<td>'+detail+'</td></tr>';
+      }).join('')+'</tbody></table>';
+  }catch(e){ $('logBody').innerHTML='<div class="err">'+esc(e.message)+'</div>'; }
+}
+async function doExport(){
+  try{
+    var r=await fetch('/api/export',{headers:hdr()});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var blob=await r.blob(), a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download='cronweb_backup.json'; a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+  }catch(e){ toast('导出失败: '+e.message); }
+}
+$('btnSave').onclick=save;
+$('btnNew').onclick=function(){openEdit(null);};
+$('btnLogout').onclick=function(){ localStorage.removeItem('cw_pwd'); location.reload(); };
+$('btnExport').onclick=doExport;
+$('btnImport').onclick=function(){ $('importFile').click(); };
+$('importFile').onchange=async function(ev){
+  var f=ev.target.files[0]; if(!f) return;
+  try{
+    var text=await f.text();
+    var r=await api('/api/import',{method:'POST',body:text});
+    toast('导入完成：成功 '+r.imported+' 个，跳过 '+r.skipped+' 个'); load();
+  }catch(e){ toast('导入失败: '+e.message); }
+  ev.target.value='';
+};
+load();
+setInterval(load,15000);
+</script>
+</body>
+</html>`;

@@ -1,0 +1,18 @@
+services:
+  cronweb:
+    build: .
+    image: cronweb-node:latest
+    restart: unless-stopped
+    init: true            # 官方推荐：避免 PID=1 僵尸进程
+    ipc: host             # 官方推荐：缺 IPC 会让 Chromium OOM 崩溃
+    shm_size: "1gb"
+    ports:
+      - "8080:8080"
+    environment:
+      PANEL_PASSWORD: ${PANEL_PASSWORD:?请在 .env 或环境中设置 PANEL_PASSWORD}
+      APP_TIMEZONE: Asia/Shanghai
+      BROWSER_MAX_CONCURRENCY: "2"
+      BROWSER_IDLE_TTL: "600"
+      # BROWSER_PROXY / BROWSER_CHANNEL 可选
+    volumes:
+      - ./data:/app/data

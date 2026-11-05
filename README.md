@@ -9,8 +9,16 @@
 
 ## 版本说明
 
-本仓库是**最终主线**。开发过程中另有两套已冻结的旧版（Python + Flask 版、Cloudflare Worker 版），未随本仓库发布，仅保留在本地原目录 `D:\下载\Github\cronweb`。
-`cron.ts` / `headers.ts` / `ui.ts` 由 Worker 版对应纯 JS 模块复制适配而来，cron 语义与请求头生成保持一致，不产生分叉实现。
+本仓库包含三套实现，**功能上是同一产品的不同档位**；但代码各自独立 —— Worker 与 Python 运行时无法复用 Node 主线的文件系统和 Chromium，因此不是同一份代码按开关裁剪：
+
+| 目录 | 版本 | 定位 |
+|---|---|---|
+| `./`（仓库根） | **Node 主线（完整版）** | Docker / GHCR 全功能：HTTP + 真实 Chromium 浏览器仿真 |
+| `worker/` | Cloudflare Worker 版 | 纯 HTTP，D1 + Cron Trigger，无浏览器仿真 |
+| `freehost/` | 免费托管 / 翼龙面板版（Python） | 纯 HTTP，Flask + APScheduler + SQLite，无浏览器仿真 |
+
+后两者是完整版的**功能阉割版**：保留任务 CRUD、启停、立即执行、间隔 / cron、失败重试、执行历史、统计、导出导入、密码保护；砍掉浏览器仿真、截图、Client Hints 身份一致性、HTTP→浏览器自动升级。三版 API 路径一致，导出的 JSON 备份可互相导入（导入只校验 `tasks`）。各版 README 里有完整对照表。
+`cron.ts` / `headers.ts` / `ui.ts` 由 Worker 版对应纯 JS 模块复制适配而来，cron 语义与请求头生成保持一致。
 
 ## 功能
 
@@ -95,6 +103,8 @@ docker run -d --init --ipc=host --shm-size=1g --user pwuser \
 > 相对常见的 Go 版示例有两点必要差异：vet 换成 Node 工具链；**必须加 `docker/setup-qemu-action@v3`** —— Dockerfile 里有 `RUN npm ci`，在 amd64 runner 上构建 arm64 镜像若不装 QEMU 会报 `exec format error`。
 
 ## 部署方式二：免费托管（hostfree 等，自动降级）
+
+> 本节指**完整版自身**在无 Chromium 环境下自动降级为纯 HTTP。若要完全不含浏览器代码、面向翼龙面板 / Python 免费托管的独立精简版，见 `freehost/` 目录；Cloudflare Workers 版见 `worker/`。
 
 ```bash
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --registry=https://registry.npmmirror.com

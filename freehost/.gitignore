@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+web-cron.db
+web-cron.db-journal
+cronweb.db
+.env
+.dev.vars

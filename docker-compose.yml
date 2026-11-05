@@ -1,7 +1,7 @@
 services:
-  cronweb:
+  web-cron:
     build: .
-    image: cronweb-node:latest
+    image: web-cron:latest
     restart: unless-stopped
     init: true            # 官方推荐：避免 PID=1 僵尸进程
     ipc: host             # 官方推荐：缺 IPC 会让 Chromium OOM 崩溃

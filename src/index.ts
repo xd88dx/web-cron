@@ -1,4 +1,4 @@
-// index.ts —— CronWeb Node 主线入口（Fastify）
+// index.ts —— web-cron Node 主线入口（Fastify）
 // 单进程：HTTP 服务 + 内嵌调度器 + 可选 Playwright Chromium。
 // 监听 0.0.0.0:$PORT，PORT 由托管平台注入。
 import fs from "node:fs/promises";
@@ -161,7 +161,7 @@ app.get("/api/tasks/:id/history", async (req, reply) => {
 
 app.get("/api/export", async (_req, reply) => {
   return json(reply, {
-    app: "cronweb-node", version: 1, exported_at: Date.now(),
+    app: "web-cron-node", version: 1, exported_at: Date.now(),
     tasks: read().tasks,
   });
 });
@@ -205,7 +205,7 @@ app.get("/api/screenshot", async (req, reply) => {
 async function main() {
   initStore();
   await app.listen({ port: PORT, host: HOST });
-  console.log(`[http] CronWeb 已启动 http://${HOST}:${PORT} · 时区 ${TZ}`);
+  console.log(`[http] web-cron 已启动 http://${HOST}:${PORT} · 时区 ${TZ}`);
   if (!PASSWORD) console.warn("[http] ⚠️ 未设置 PANEL_PASSWORD，管理面板对公网裸露，请务必设置");
   startScheduler();
   // 浏览器探测放到后台，不阻塞 Web 服务；失败即自动降级为纯 HTTP

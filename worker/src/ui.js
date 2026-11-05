@@ -1,0 +1,288 @@
+// ui.js —— 管理面板 HTML（内嵌，Worker 直接返回，无需静态资源绑定）
+// 注意：外层用 String.raw 模板，内部禁止出现反引号与 ${，前端 JS 一律用字符串拼接。
+export const HTML = String.raw`<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>web-cron · 多功能定时任务调度器</title>
+<style>
+:root{--bg:#f4f6fb;--card:#fff;--line:#e5e9f2;--txt:#1f2937;--muted:#6b7280;--blue:#2563eb;--green:#16a34a;--green-bg:#f0fdf4;--red:#dc2626;--red-bg:#fef2f2;--gray-bg:#f3f4f6;--shadow:0 1px 3px rgba(16,24,40,.08)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--txt);font-size:14px}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:20}
+.brand{font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px}
+.brand small{color:var(--muted);font-weight:400;font-size:12px}
+.hd-actions{display:flex;gap:8px;flex-wrap:wrap}
+button{cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--txt);border-radius:8px;padding:7px 14px;font-size:13px;transition:.15s}
+button:hover{border-color:var(--blue);color:var(--blue)}
+button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+button.primary:hover{background:#1d4ed8;color:#fff}
+button.danger:hover{border-color:var(--red);color:var(--red)}
+button.icon{padding:6px 9px;font-size:14px;line-height:1}
+main{max-width:1200px;margin:0 auto;padding:20px 24px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
+.stat .v{font-size:24px;font-weight:700;margin-top:4px}
+.stat .l{color:var(--muted);font-size:12px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+table{width:100%;border-collapse:collapse}
+th{font-size:12px;color:var(--muted);text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);background:#fafbfd;font-weight:600}
+td{padding:12px 16px;border-bottom:1px solid var(--line);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbfd}
+.tname{font-weight:600}
+.turl{color:var(--muted);font-size:12px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.badge.on{background:var(--green-bg);color:var(--green)}
+.badge.off{background:var(--gray-bg);color:var(--muted)}
+.badge.ok{background:var(--green-bg);color:var(--green)}
+.badge.fail{background:var(--red-bg);color:var(--red)}
+.badge.idle{background:var(--gray-bg);color:var(--muted)}
+.muted{color:var(--muted);font-size:12px}
+.ops{display:flex;gap:6px;justify-content:flex-end}
+.empty{text-align:center;padding:48px 0;color:var(--muted)}
+.empty .big{font-size:36px;margin-bottom:8px}
+.overlay{position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
+.overlay.show{display:flex}
+.modal{background:var(--card);border-radius:14px;width:100%;max-width:560px;max-height:90vh;overflow:auto;padding:22px 24px;box-shadow:0 20px 50px rgba(0,0,0,.25)}
+.modal h3{margin-bottom:16px;font-size:16px}
+.frow{margin-bottom:12px}
+.frow label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-weight:600}
+.frow input,.frow select,.frow textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;background:#fff;color:var(--txt)}
+.frow textarea{resize:vertical;min-height:64px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.mfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.err{color:var(--red);font-size:12px;min-height:16px;margin-top:6px}
+.histok{color:var(--green);font-weight:700}
+.histfail{color:var(--red);font-weight:700}
+.snippet{background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;color:var(--muted);white-space:pre-wrap;word-break:break-all;margin-top:4px;max-height:120px;overflow:auto}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:99}
+#toast.show{opacity:1}
+.login-box{max-width:340px}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">⏰ web-cron <small>多功能定时任务调度器 · Worker 版</small></div>
+  <div class="hd-actions">
+    <button id="btnExport">导出备份</button>
+    <button id="btnImport">导入备份</button>
+    <button id="btnLogout" class="hidden">退出登录</button>
+    <button id="btnNew" class="primary">＋ 新建任务</button>
+  </div>
+</header>
+<main>
+  <section class="stats">
+    <div class="stat"><div class="l">任务总数</div><div class="v" id="stTasks">-</div></div>
+    <div class="stat"><div class="l">运行中</div><div class="v" id="stEnabled">-</div></div>
+    <div class="stat"><div class="l">24h 成功率</div><div class="v" id="stRate">-</div></div>
+    <div class="stat"><div class="l">24h 执行次数</div><div class="v" id="stRuns">-</div></div>
+  </section>
+  <section class="panel">
+    <table>
+      <thead><tr>
+        <th style="width:80px">状态</th><th>任务</th><th style="width:170px">调度规则</th>
+        <th style="width:190px">上次执行</th><th style="width:160px">下次执行</th>
+        <th style="width:210px;text-align:right">操作</th>
+      </tr></thead>
+      <tbody id="taskBody"></tbody>
+    </table>
+    <div class="empty hidden" id="emptyBox"><div class="big">📭</div>还没有任务，点击右上角「新建任务」添加第一个定时访问任务</div>
+  </section>
+</main>
+
+<div class="overlay" id="editOverlay">
+  <div class="modal">
+    <h3 id="editTitle">新建任务</h3>
+    <div class="frow"><label>任务名称 *</label><input id="fName" placeholder="例：站点保活"></div>
+    <div class="frow"><label>访问地址 URL *</label><input id="fUrl" placeholder="https://example.com/ping"></div>
+    <div class="grid3">
+      <div class="frow"><label>请求方法</label><select id="fMethod"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>HEAD</option><option>PATCH</option></select></div>
+      <div class="frow"><label>超时（秒，1-120）</label><input id="fTimeout" type="number" value="30" min="1" max="120"></div>
+      <div class="frow"><label>失败重试次数（0-5）</label><input id="fRetries" type="number" value="0" min="0" max="5"></div>
+    </div>
+    <div class="frow"><label>调度方式</label>
+      <select id="fStype" onchange="document.getElementById('intervalBox').classList.toggle('hidden',this.value!=='interval');document.getElementById('cronBox').classList.toggle('hidden',this.value!=='cron')">
+        <option value="interval">固定间隔（每 N 分钟）</option><option value="cron">Cron 表达式（分 时 日 月 周）</option>
+      </select>
+    </div>
+    <div class="grid2">
+      <div class="frow" id="intervalBox"><label>间隔（分钟，≥1）</label><input id="fInterval" type="number" value="5" min="1"></div>
+      <div class="frow hidden" id="cronBox"><label>Cron 表达式（5 段式，按设置时区判定）</label><input id="fCron" placeholder="*/5 * * * *"></div>
+    </div>
+    <div class="frow"><label>请求头（每行 Key: Value，或 JSON 对象，可覆盖默认浏览器头）</label><textarea id="fHeaders" placeholder="Authorization: Bearer xxx"></textarea></div>
+    <div class="frow"><label>请求体 Body（非 GET 时生效，可选）</label><textarea id="fBody" placeholder="{&quot;keepalive&quot;: true}"></textarea></div>
+    <div class="err" id="editErr"></div>
+    <div class="mfoot"><button onclick="closeEdit()">取消</button><button class="primary" id="btnSave">保存</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="logOverlay">
+  <div class="modal" style="max-width:760px">
+    <h3 id="logTitle">执行日志</h3>
+    <div id="logBody"></div>
+    <div class="mfoot"><button onclick="document.getElementById('logOverlay').classList.remove('show')">关闭</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="loginOverlay">
+  <div class="modal login-box">
+    <h3>🔐 web-cron 管理登录</h3>
+    <div class="frow"><label>访问密码</label><input id="loginPwd" type="password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+    <div class="err" id="loginErr"></div>
+    <div class="mfoot"><button class="primary" onclick="doLogin()">登录</button></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<input type="file" id="importFile" accept=".json" class="hidden">
+
+<script>
+let TASKS = [], TZ = 'UTC', editingId = null, authRequired = false;
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function fmt(ts){
+  if(!ts) return '';
+  try{ return new Intl.DateTimeFormat('zh-CN',{timeZone:TZ,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(ts)).replace(/\//g,'-'); }
+  catch(e){ return new Date(ts).toISOString(); }
+}
+function hdr(){ var h={'Content-Type':'application/json'}, p=localStorage.getItem('cw_pwd'); if(p) h['X-Auth']=p; return h; }
+function toast(msg){ var t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(function(){t.classList.remove('show');},2200); }
+async function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({}, hdr(), opts.headers || {});
+  var r = await fetch(path, opts);
+  if(r.status===401){ $('loginOverlay').classList.add('show'); throw new Error('unauthorized'); }
+  var d = await r.json().catch(function(){return {};});
+  if(!r.ok) throw new Error(d.error || ('HTTP '+r.status));
+  return d;
+}
+async function doLogin(){
+  try{
+    var r = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:$('loginPwd').value})});
+    if(!r.ok) throw new Error('bad');
+    localStorage.setItem('cw_pwd',$('loginPwd').value);
+    $('loginOverlay').classList.remove('show'); $('loginErr').textContent=''; load();
+  }catch(e){ $('loginErr').textContent='密码错误'; }
+}
+function schedText(t){ return t.schedule_type==='cron' ? 'cron: '+t.cron_expr : '每 '+t.interval_minutes+' 分钟'; }
+function lastBadge(t){
+  if(t.last_run_at == null) return '<span class="badge idle">未运行</span>';
+  if(t.last_ok===1) return '<span class="badge ok">✓ '+(t.last_status_code==null?'-':t.last_status_code)+' · '+t.last_duration_ms+'ms</span>';
+  return '<span class="badge fail" title="'+esc(t.last_error||'')+'">✗ '+(t.last_status_code==null?'-':t.last_status_code)+' · '+esc(t.last_error||'失败')+'</span>';
+}
+function render(d){
+  TASKS = d.tasks; TZ = d.timezone || 'UTC'; authRequired = d.auth_required;
+  if(authRequired) $('btnLogout').classList.remove('hidden');
+  var s=d.stats;
+  $('stTasks').textContent=s.tasks; $('stEnabled').textContent=s.enabled;
+  $('stRate').textContent=(s.rate24==null?'—':s.rate24+'%'); $('stRuns').textContent=s.runs24;
+  $('taskBody').innerHTML = d.tasks.map(function(t){
+    return '<tr>'+
+      '<td>'+(t.enabled?'<span class="badge on">● 运行中</span>':'<span class="badge off">⏸ 已暂停</span>')+'</td>'+
+      '<td><span class="tname">'+esc(t.name)+'</span><span class="turl" title="'+esc(t.url)+'">'+esc(t.method)+' '+esc(t.url)+'</span></td>'+
+      '<td>'+esc(schedText(t))+(t.retries>0?'<div class="muted">失败重试 '+t.retries+' 次</div>':'')+'</td>'+
+      '<td>'+lastBadge(t)+'<div class="muted">'+esc(t.last_run_at_str||'')+'</div></td>'+
+      '<td class="muted">'+(t.enabled?esc(t.next_run_at_str||'等待调度'):'—')+'</td>'+
+      '<td><div class="ops">'+
+        '<button class="icon" title="立即执行" onclick="runNow('+t.id+')">▶</button>'+
+        '<button class="icon" title="'+(t.enabled?'暂停':'启动')+'" onclick="toggleTask('+t.id+')">'+(t.enabled?'⏸':'▶︎')+'</button>'+
+        '<button class="icon" title="执行日志" onclick="showLog('+t.id+')">📜</button>'+
+        '<button class="icon" title="编辑" onclick="openEdit('+t.id+')">✏️</button>'+
+        '<button class="icon danger" title="删除" onclick="delTask('+t.id+')">🗑</button>'+
+      '</div></td></tr>';
+  }).join('');
+  $('emptyBox').classList.toggle('hidden', d.tasks.length>0);
+}
+async function load(){
+  try{ render(await api('/api/tasks')); }
+  catch(e){ if(e.message!=='unauthorized') toast('加载失败: '+e.message); }
+}
+function taskById(id){ return TASKS.find(function(t){return t.id===id;}) || {}; }
+function openEdit(id){
+  editingId=id; $('editErr').textContent=''; $('editTitle').textContent=id?'编辑任务':'新建任务';
+  var t=taskById(id);
+  $('fName').value=t.name||''; $('fUrl').value=t.url||''; $('fMethod').value=t.method||'GET';
+  $('fTimeout').value=t.timeout_seconds==null?30:t.timeout_seconds;
+  $('fRetries').value=t.retries==null?0:t.retries;
+  $('fStype').value=t.schedule_type||'interval';
+  $('fInterval').value=t.interval_minutes==null?5:t.interval_minutes;
+  $('fCron').value=t.cron_expr||''; $('fHeaders').value=t.headers||''; $('fBody').value=t.body||'';
+  $('fStype').dispatchEvent(new Event('change'));
+  $('editOverlay').classList.add('show');
+}
+function closeEdit(){ $('editOverlay').classList.remove('show'); editingId=null; }
+async function save(){
+  var payload={ name:$('fName').value, url:$('fUrl').value, method:$('fMethod').value,
+    timeout_seconds:+$('fTimeout').value, retries:+$('fRetries').value,
+    schedule_type:$('fStype').value, interval_minutes:+$('fInterval').value,
+    cron_expr:$('fCron').value, headers:$('fHeaders').value, body:$('fBody').value };
+  try{
+    if(editingId) await api('/api/tasks/'+editingId,{method:'PUT',body:JSON.stringify(payload)});
+    else await api('/api/tasks',{method:'POST',body:JSON.stringify(payload)});
+    closeEdit(); toast('已保存'); load();
+  }catch(e){ $('editErr').textContent=e.message; }
+}
+async function runNow(id){
+  toast('正在执行…');
+  try{
+    var r=await api('/api/tasks/'+id+'/run',{method:'POST'});
+    if(r.result.ok) toast('✓ 执行成功 · HTTP '+r.result.status_code+' · '+r.result.duration_ms+'ms');
+    else toast('✗ 执行失败 · '+(r.result.error||('HTTP '+r.result.status_code)));
+    load();
+  }catch(e){ toast('执行失败: '+e.message); }
+}
+async function toggleTask(id){ try{ await api('/api/tasks/'+id+'/toggle',{method:'POST'}); load(); }catch(e){ toast(e.message); } }
+async function delTask(id){
+  var t=taskById(id);
+  if(!confirm('确定删除任务「'+t.name+'」？其执行历史也将删除。')) return;
+  try{ await api('/api/tasks/'+id,{method:'DELETE'}); toast('已删除'); load(); }catch(e){ toast(e.message); }
+}
+async function showLog(id){
+  var t=taskById(id);
+  $('logTitle').textContent='📜 执行日志 — '+t.name;
+  $('logBody').innerHTML='<div class="muted">加载中…</div>';
+  $('logOverlay').classList.add('show');
+  try{
+    var r=await api('/api/tasks/'+id+'/history?limit=50');
+    $('logBody').innerHTML = r.history.length===0 ? '<div class="empty">暂无执行记录</div>' :
+      '<table><thead><tr><th>时间</th><th>结果</th><th>状态码</th><th>耗时</th><th>详情</th></tr></thead><tbody>'+
+      r.history.map(function(h){
+        return '<tr><td class="muted" style="white-space:nowrap">'+esc(h.run_at_str)+'</td>'+
+          '<td>'+(h.ok?'<span class="histok">成功</span>':'<span class="histfail">失败</span>')+'</td>'+
+          '<td>'+(h.status_code==null?'-':h.status_code)+'</td><td>'+h.duration_ms+'ms</td>'+
+          '<td><div class="muted">'+esc(h.error||'')+'</div>'+(h.snippet?'<div class="snippet">'+esc(h.snippet)+'</div>':'')+'</td></tr>';
+      }).join('')+'</tbody></table>';
+  }catch(e){ $('logBody').innerHTML='<div class="err">'+esc(e.message)+'</div>'; }
+}
+async function doExport(){
+  try{
+    var r=await fetch('/api/export',{headers:hdr()});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var blob=await r.blob(), a=document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download='web-cron_backup.json'; a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
+  }catch(e){ toast('导出失败: '+e.message); }
+}
+$('btnSave').onclick=save;
+$('btnNew').onclick=function(){openEdit(null);};
+$('btnLogout').onclick=function(){ localStorage.removeItem('cw_pwd'); location.reload(); };
+$('btnExport').onclick=doExport;
+$('btnImport').onclick=function(){ $('importFile').click(); };
+$('importFile').onchange=async function(ev){
+  var f=ev.target.files[0]; if(!f) return;
+  try{
+    var text=await f.text();
+    var r=await api('/api/import',{method:'POST',body:text});
+    toast('导入完成：成功 '+r.imported+' 个，跳过 '+r.skipped+' 个'); load();
+  }catch(e){ toast('导入失败: '+e.message); }
+  ev.target.value='';
+};
+load();
+setInterval(load,15000);
+</script>
+</body>
+</html>`;

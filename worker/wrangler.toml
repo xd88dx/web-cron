@@ -1,0 +1,17 @@
+name = "web-cron"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Cron Trigger 固定每分钟唤醒一次；任务级「间隔 / cron 表达式」由 Worker 按 next_run_at 判定
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "web-cron"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+# 任务 cron 表达式的判定时区（间隔任务与时区无关）
+APP_TIMEZONE = "Asia/Shanghai"
+# PANEL_PASSWORD 请用 `wrangler secret put PANEL_PASSWORD` 设置，不要写在这里

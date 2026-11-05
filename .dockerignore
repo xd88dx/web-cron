@@ -7,3 +7,5 @@ data/
 *.log
 README.md
 test/
+worker/
+freehost/

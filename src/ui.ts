@@ -6,7 +6,7 @@ export const HTML = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CronWeb · 多功能定时任务调度器</title>
+<title>web-cron · 多功能定时任务调度器</title>
 <style>
 :root{--bg:#f4f6fb;--card:#fff;--line:#e5e9f2;--txt:#1f2937;--muted:#6b7280;--blue:#2563eb;--purple:#7c3aed;--purple-bg:#f5f3ff;--green:#16a34a;--green-bg:#f0fdf4;--red:#dc2626;--red-bg:#fef2f2;--amber:#b45309;--amber-bg:#fffbeb;--gray-bg:#f3f4f6;--shadow:0 1px 3px rgba(16,24,40,.08)}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -79,7 +79,7 @@ tr:hover td{background:#fafbfd}
 </head>
 <body>
 <header>
-  <div class="brand">⏰ CronWeb <small>多功能定时任务调度器 · Node 版</small></div>
+  <div class="brand">⏰ web-cron <small>多功能定时任务调度器 · Node 版</small></div>
   <div class="hd-actions">
     <span id="bStatus" class="bstatus no">浏览器仿真：探测中…</span>
     <button id="btnExport">导出备份</button>
@@ -167,7 +167,7 @@ tr:hover td{background:#fafbfd}
 
 <div class="overlay" id="loginOverlay">
   <div class="modal login-box">
-    <h3>🔐 CronWeb 管理登录</h3>
+    <h3>🔐 web-cron 管理登录</h3>
     <div class="frow"><label>访问密码</label><input id="loginPwd" type="password" onkeydown="if(event.key==='Enter')doLogin()"></div>
     <div class="err" id="loginErr"></div>
     <div class="mfoot"><button class="primary" onclick="doLogin()">登录</button></div>
@@ -350,7 +350,7 @@ async function doExport(){
     var r=await fetch('/api/export',{headers:hdr()});
     if(!r.ok) throw new Error('HTTP '+r.status);
     var blob=await r.blob(), a=document.createElement('a');
-    a.href=URL.createObjectURL(blob); a.download='cronweb_backup.json'; a.click();
+    a.href=URL.createObjectURL(blob); a.download='web-cron_backup.json'; a.click();
     setTimeout(function(){URL.revokeObjectURL(a.href);},1000);
   }catch(e){ toast('导出失败: '+e.message); }
 }

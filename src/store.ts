@@ -29,6 +29,7 @@ export function taskDefaults(): Omit<Task, "id" | "name" | "url"> {
     last_duration_ms: null, last_error: "", last_mode: null,
     last_final_url: "", last_page_title: "", last_challenge: 0,
     success_count: 0, fail_count: 0,
+    sort_order: 0,
   };
 }
 

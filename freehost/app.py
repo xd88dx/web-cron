@@ -82,7 +82,8 @@ def init_db():
                 last_duration_ms INTEGER,
                 last_error TEXT,
                 success_count INTEGER NOT NULL DEFAULT 0,
-                fail_count INTEGER NOT NULL DEFAULT 0
+                fail_count INTEGER NOT NULL DEFAULT 0,
+                sort_order INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS history(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +99,11 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_history_task ON history(task_id, id DESC);
             """
         )
+        # 旧库平滑迁移：tasks 缺 sort_order 列时自动补上（新库由建表语句直接包含）
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(tasks)")]
+        if "sort_order" not in cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            app.logger.info("已迁移：tasks 表新增 sort_order 列")
         conn.commit()
 
 
@@ -388,7 +394,8 @@ def validate_payload(data):
 @app.get("/api/tasks")
 def list_tasks():
     with closing(db()) as conn:
-        rows = [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY id DESC")]
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM tasks ORDER BY sort_order ASC, id ASC")]
         n_tasks = len(rows)
         n_enabled = sum(1 for r in rows if r["enabled"])
         since = (datetime.now() - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
@@ -419,19 +426,45 @@ def create_task():
         return jsonify(error=err), 400
     now = now_str()
     with closing(db()) as conn:
+        # 新任务排在列表末尾
+        next_sort = int(conn.execute(
+            "SELECT COALESCE(MAX(sort_order),0) m FROM tasks").fetchone()["m"] or 0) + 1
         cur = conn.execute(
             "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
-            "interval_minutes,cron_expr,timeout_seconds,retries,enabled,created_at,updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            "interval_minutes,cron_expr,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?)",
             (fields["name"], fields["url"], fields["method"], fields["headers"],
              fields["body"], fields["schedule_type"], fields["interval_minutes"],
-             fields["cron_expr"], fields["timeout_seconds"], fields["retries"], now, now),
+             fields["cron_expr"], fields["timeout_seconds"], fields["retries"],
+             next_sort, now, now),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone()
     if row["enabled"]:
         schedule_task(row)
     return jsonify(task=dict(row))
+
+
+@app.post("/api/tasks/reorder")
+def reorder_tasks():
+    """拖拽排序持久化：ids 必须恰好是全部任务 id 的一个排列，按数组顺序写入 sort_order"""
+    data = request.get_json(force=True, silent=True) or {}
+    ids = data.get("ids")
+    if (not isinstance(ids, list) or not ids
+            or not all(isinstance(x, int) and not isinstance(x, bool) for x in ids)):
+        return jsonify(error="ids 必须是非空的任务 id 数组"), 400
+    with closing(db()) as conn:
+        have = [r["id"] for r in conn.execute("SELECT id FROM tasks")]
+        if len(ids) != len(have) or len(set(ids)) != len(ids) or set(ids) != set(have):
+            return jsonify(error="ids 必须恰好包含全部任务 id"), 400
+        now = now_str()
+        for i, tid in enumerate(ids):
+            conn.execute(
+                "UPDATE tasks SET sort_order=?, updated_at=? WHERE id=?",
+                (i + 1, now, tid),
+            )
+        conn.commit()
+    return jsonify(ok=True)
 
 
 @app.put("/api/tasks/<int:task_id>")
@@ -525,27 +558,30 @@ def import_data():
     if not isinstance(tasks, list) or not tasks:
         return jsonify(error="导入文件中没有任务数据"), 400
     imported, skipped = 0, 0
-    for t in tasks:
-        fields, err = validate_payload(t)
-        if err:
-            skipped += 1
-            continue
-        now = now_str()
-        with closing(db()) as conn:
+    with closing(db()) as conn:
+        so = int(conn.execute(
+            "SELECT COALESCE(MAX(sort_order),0) m FROM tasks").fetchone()["m"] or 0)
+        for t in tasks:
+            fields, err = validate_payload(t)
+            if err:
+                skipped += 1
+                continue
+            now = now_str()
+            so += 1
             cur = conn.execute(
                 "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
-                "interval_minutes,cron_expr,timeout_seconds,retries,enabled,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "interval_minutes,cron_expr,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (fields["name"], fields["url"], fields["method"], fields["headers"],
                  fields["body"], fields["schedule_type"], fields["interval_minutes"],
                  fields["cron_expr"], fields["timeout_seconds"], fields["retries"],
-                 1 if t.get("enabled", 1) else 0, now, now),
+                 1 if t.get("enabled", 1) else 0, so, now, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone()
-        if row["enabled"]:
-            schedule_task(row)
-        imported += 1
+            if row["enabled"]:
+                schedule_task(row)
+            imported += 1
     return jsonify(ok=True, imported=imported, skipped=skipped)
 
 

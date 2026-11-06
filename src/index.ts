@@ -73,8 +73,9 @@ app.post("/api/login", async (req, reply) => {
 app.get("/api/tasks", async (_req, reply) => {
   const d = read();
   const bs = browserState();
+  const list = [...d.tasks].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id);
   return json(reply, {
-    tasks: d.tasks.map((t) => ({
+    tasks: list.map((t) => ({
       ...t,
       next_run_at_str: t.enabled ? fmtTs(t.next_run_at, TZ) : null,
       last_run_at_str: fmtTs(t.last_run_at, TZ),
@@ -96,10 +97,36 @@ app.post("/api/tasks", async (req, reply) => {
   const t = await mutate((d: StoreData) => {
     d.seqTask += 1;
     const task = makeTask(d.seqTask, f, now);
+    // 新任务排在列表末尾
+    task.sort_order = d.tasks.reduce((m, x) => Math.max(m, x.sort_order || 0), 0) + 1;
     d.tasks.push(task);
     return task;
   });
   return json(reply, { ok: true, id: t.id, next_run_at: t.next_run_at });
+});
+
+// 拖拽排序持久化：ids 必须恰好是全部任务 id 的一个排列，按数组顺序写入 sort_order
+app.post("/api/tasks/reorder", async (req, reply) => {
+  const ids: unknown = (req.body as any)?.ids;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => !Number.isInteger(x))) {
+    return fail(reply, "ids 必须是非空的任务 id 数组");
+  }
+  const r = await mutate((d) => {
+    const want = ids as number[];
+    const have = d.tasks.map((t) => t.id);
+    if (want.length !== have.length || new Set(want).size !== want.length ||
+        want.some((id) => !have.includes(id))) {
+      return null;
+    }
+    want.forEach((id, i) => {
+      const t = d.tasks.find((x) => x.id === id)!;
+      t.sort_order = i + 1;
+      t.updated_at = Date.now();
+    });
+    return true;
+  });
+  if (r === null) return fail(reply, "ids 必须恰好包含全部任务 id");
+  return json(reply, { ok: true });
 });
 
 app.put("/api/tasks/:id", async (req, reply) => {
@@ -181,6 +208,7 @@ app.post("/api/import", async (req, reply) => {
       const t = makeTask(store.seqTask, f, now);
       t.enabled = raw.enabled === 0 ? 0 : 1;
       if (!t.enabled) t.next_run_at = null;
+      t.sort_order = store.tasks.reduce((m, x) => Math.max(m, x.sort_order || 0), 0) + 1;
       store.tasks.push(t);
       imported++;
     }

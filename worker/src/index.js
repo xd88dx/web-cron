@@ -7,6 +7,18 @@ import { HTML } from "./ui.js";
 
 const HISTORY_KEEP = 200;
 
+// 旧库平滑迁移：tasks 缺 sort_order 列时自动补上（列已存在时报错被忽略）。
+// 新装库由 schema.sql 直接建好该列；已有部署首个请求/第一次调度时自动完成迁移。
+let schemaReady = null;
+function ensureSchema(env) {
+  if (!schemaReady) {
+    schemaReady = env.DB.prepare(
+      "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+    ).run().catch(() => {});
+  }
+  return schemaReady;
+}
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -182,6 +194,7 @@ async function runDue(env, now) {
 // --------------------------------------------------------------------------- API
 
 async function handleApi(req, env, url) {
+  await ensureSchema(env);
   const p = url.pathname;
   const method = req.method;
   const body = async () => { try { return await req.json(); } catch (_) { return {}; } };
@@ -197,7 +210,7 @@ async function handleApi(req, env, url) {
 
   if (p === "/api/tasks" && method === "GET") {
     const [tr, st, st24] = await Promise.all([
-      env.DB.prepare("SELECT * FROM tasks ORDER BY id DESC").all(),
+      env.DB.prepare("SELECT * FROM tasks ORDER BY sort_order ASC, id ASC").all(),
       env.DB.prepare("SELECT COUNT(*) c, COALESCE(SUM(enabled),0) e FROM tasks").first(),
       env.DB.prepare("SELECT COUNT(*) c, COALESCE(SUM(ok),0) s FROM history WHERE run_at>=?")
         .bind(Date.now() - 86400000).first(),
@@ -222,13 +235,33 @@ async function handleApi(req, env, url) {
     try { f = validate(await body()); } catch (e) { return fail(e.message); }
     const now = Date.now();
     const next = computeNextRun(f, now, tz(env));
+    const mr = await env.DB.prepare("SELECT COALESCE(MAX(sort_order),0) m FROM tasks").first();
     const ins = await env.DB.prepare(
       "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
-      "timeout_seconds,retries,enabled,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?)"
+      "timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)"
     ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
            f.interval_minutes, f.cron_expr, f.timeout_seconds, f.retries,
-           now, now, next).run();
+           Number(mr?.m || 0) + 1, now, now, next).run();
     return json({ ok: true, id: ins?.meta?.last_row_id ?? null, next_run_at: next });
+  }
+
+  // 拖拽排序持久化：ids 必须恰好是全部任务 id 的一个排列，按数组顺序写入 sort_order
+  if (p === "/api/tasks/reorder" && method === "POST") {
+    const d = await body();
+    const ids = Array.isArray(d.ids) ? d.ids : [];
+    if (!ids.length || ids.some((x) => !Number.isInteger(x))) {
+      return fail("ids 必须是非空的任务 id 数组");
+    }
+    const tr = await env.DB.prepare("SELECT id FROM tasks").all();
+    const have = (tr.results || []).map((r) => Number(r.id));
+    if (ids.length !== have.length || new Set(ids).size !== ids.length ||
+        ids.some((id) => !have.includes(id))) {
+      return fail("ids 必须恰好包含全部任务 id");
+    }
+    await env.DB.batch(ids.map((id, i) =>
+      env.DB.prepare("UPDATE tasks SET sort_order=?,updated_at=? WHERE id=?")
+        .bind(i + 1, Date.now(), id)));
+    return json({ ok: true });
   }
 
   let m = p.match(/^\/api\/tasks\/(\d+)(?:\/(\w+))?$/);
@@ -297,18 +330,21 @@ async function handleApi(req, env, url) {
     const tasks = Array.isArray(d.tasks) ? d.tasks : [];
     if (!tasks.length) return fail("导入文件中没有任务数据");
     let imported = 0, skipped = 0;
+    const mr = await env.DB.prepare("SELECT COALESCE(MAX(sort_order),0) m FROM tasks").first();
+    let so = Number(mr?.m || 0);
     for (const t of tasks) {
       let f;
       try { f = validate(t); } catch (_) { skipped++; continue; }
       const now = Date.now();
       const next = computeNextRun(f, now, tz(env));
       const enabled = t.enabled === 0 ? 0 : 1;
+      so += 1;
       await env.DB.prepare(
         "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
-        "timeout_seconds,retries,enabled,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        "timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
       ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
              f.interval_minutes, f.cron_expr, f.timeout_seconds, f.retries,
-             enabled, now, now, next).run();
+             enabled, so, now, now, next).run();
       imported++;
     }
     return json({ ok: true, imported, skipped });
@@ -344,6 +380,6 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runDue(env, Date.now()));
+    ctx.waitUntil(ensureSchema(env).then(() => runDue(env, Date.now())));
   },
 };

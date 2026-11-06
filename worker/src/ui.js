@@ -5,7 +5,7 @@ export const HTML = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>web-cron · 多功能定时任务调度器</title>
+<title>Web 定时任务</title>
 <style>
 :root{--bg:#f4f6fb;--card:#fff;--line:#e5e9f2;--txt:#1f2937;--muted:#6b7280;--blue:#2563eb;--green:#16a34a;--green-bg:#f0fdf4;--red:#dc2626;--red-bg:#fef2f2;--gray-bg:#f3f4f6;--shadow:0 1px 3px rgba(16,24,40,.08)}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -19,7 +19,10 @@ button:hover{border-color:var(--blue);color:var(--blue)}
 button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
 button.primary:hover{background:#1d4ed8;color:#fff}
 button.danger:hover{border-color:var(--red);color:var(--red)}
-button.icon{padding:6px 9px;font-size:14px;line-height:1}
+button.icon{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;font-size:14px;line-height:1;border-radius:8px;color:var(--muted)}
+button.icon:hover{color:var(--blue);border-color:var(--blue);background:#eff6ff}
+button.icon.danger{color:var(--red)}
+button.icon.danger:hover{background:var(--red-bg);border-color:var(--red);color:var(--red)}
 main{max-width:1200px;margin:0 auto;padding:20px 24px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:20px}
 .stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;box-shadow:var(--shadow)}
@@ -27,13 +30,13 @@ main{max-width:1200px;margin:0 auto;padding:20px 24px}
 .stat .l{color:var(--muted);font-size:12px}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
 table{width:100%;border-collapse:collapse}
-th{font-size:12px;color:var(--muted);text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);background:#fafbfd;font-weight:600}
+th{font-size:12px;color:var(--muted);text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);background:#fafbfd;font-weight:600;white-space:nowrap}
 td{padding:12px 16px;border-bottom:1px solid var(--line);vertical-align:middle}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:#fafbfd}
 .tname{font-weight:600}
 .turl{color:var(--muted);font-size:12px;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
-.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
 .badge.on{background:var(--green-bg);color:var(--green)}
 .badge.off{background:var(--gray-bg);color:var(--muted)}
 .badge.ok{background:var(--green-bg);color:var(--green)}
@@ -61,6 +64,11 @@ tr:hover td{background:#fafbfd}
 #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:10px 20px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:99}
 #toast.show{opacity:1}
 .login-box{max-width:340px}
+td .muted{margin-top:3px}
+#taskBody tr[draggable]{cursor:grab}
+#taskBody tr.dragging{opacity:.4}
+#taskBody tr.drop-before td{box-shadow:inset 0 2px 0 var(--blue)}
+#taskBody tr.drop-after td{box-shadow:inset 0 -2px 0 var(--blue)}
 .hidden{display:none!important}
 </style>
 </head>
@@ -181,26 +189,94 @@ function render(d){
   $('stTasks').textContent=s.tasks; $('stEnabled').textContent=s.enabled;
   $('stRate').textContent=(s.rate24==null?'—':s.rate24+'%'); $('stRuns').textContent=s.runs24;
   $('taskBody').innerHTML = d.tasks.map(function(t){
-    return '<tr>'+
+    return '<tr draggable="true" data-id="'+t.id+'">'+
       '<td>'+(t.enabled?'<span class="badge on">● 运行中</span>':'<span class="badge off">⏸ 已暂停</span>')+'</td>'+
       '<td><span class="tname">'+esc(t.name)+'</span><span class="turl" title="'+esc(t.url)+'">'+esc(t.method)+' '+esc(t.url)+'</span></td>'+
       '<td>'+esc(schedText(t))+(t.retries>0?'<div class="muted">失败重试 '+t.retries+' 次</div>':'')+'</td>'+
       '<td>'+lastBadge(t)+'<div class="muted">'+esc(t.last_run_at_str||'')+'</div></td>'+
       '<td class="muted">'+(t.enabled?esc(t.next_run_at_str||'等待调度'):'—')+'</td>'+
       '<td><div class="ops">'+
-        '<button class="icon" title="立即执行" onclick="runNow('+t.id+')">▶</button>'+
-        '<button class="icon" title="'+(t.enabled?'暂停':'启动')+'" onclick="toggleTask('+t.id+')">'+(t.enabled?'⏸':'▶︎')+'</button>'+
-        '<button class="icon" title="执行日志" onclick="showLog('+t.id+')">📜</button>'+
-        '<button class="icon" title="编辑" onclick="openEdit('+t.id+')">✏️</button>'+
-        '<button class="icon danger" title="删除" onclick="delTask('+t.id+')">🗑</button>'+
+        '<button class="icon" title="立即执行" onclick="runNow('+t.id+')">'+svgIcon('play')+'</button>'+
+        '<button class="icon" title="'+(t.enabled?'暂停':'启动')+'" onclick="toggleTask('+t.id+')">'+svgIcon(t.enabled?'pause':'power')+'</button>'+
+        '<button class="icon" title="执行日志" onclick="showLog('+t.id+')">'+svgIcon('log')+'</button>'+
+        '<button class="icon" title="编辑" onclick="openEdit('+t.id+')">'+svgIcon('edit')+'</button>'+
+        '<button class="icon danger" title="删除" onclick="delTask('+t.id+')">'+svgIcon('del')+'</button>'+
       '</div></td></tr>';
   }).join('');
   $('emptyBox').classList.toggle('hidden', d.tasks.length>0);
 }
+var LAST=null, dragBusy=false;
 async function load(){
-  try{ render(await api('/api/tasks')); }
+  if(dragBusy) return;  // 拖拽进行中跳过自动刷新，避免定时 render 打断拖拽
+  try{ LAST=await api('/api/tasks'); render(LAST); }
   catch(e){ if(e.message!=='unauthorized') toast('加载失败: '+e.message); }
 }
+function svgIcon(n){
+  var P={
+    play:'<polygon points="6 4 20 12 6 20 6 4"/>',
+    pause:'<line x1="9" y1="5" x2="9" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/>',
+    power:'<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>',
+    log:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/>',
+    edit:'<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+    del:'<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'
+  };
+  return '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+P[n]+'</svg>';
+}
+async function saveReorder(ids){
+  try{ await api('/api/tasks/reorder',{method:'POST',body:JSON.stringify({ids:ids})}); toast('排序已保存'); }
+  catch(e){ toast('排序保存失败: '+e.message); }
+  load();
+}
+(function(){  // 任务列表拖拽排序：事件委托挂在 tbody 上，render 重建行不影响监听
+  var tb=document.getElementById('taskBody'); var dragId=null;
+  function rowOf(e){ var el=e.target; return el && el.closest ? el.closest('tr') : null; }
+  tb.addEventListener('dragstart',function(e){
+    var tr=rowOf(e); if(!tr||!tr.getAttribute('data-id')) return;
+    dragId=+tr.getAttribute('data-id'); dragBusy=true;
+    tr.classList.add('dragging'); e.dataTransfer.effectAllowed='move';
+    try{ e.dataTransfer.setData('text/plain',String(dragId)); }catch(_){}
+  });
+  tb.addEventListener('dragover',function(e){
+    if(dragId==null) return;
+    var tr=rowOf(e); if(!tr) return;
+    var dst=+tr.getAttribute('data-id');
+    if(!dst||dst===dragId) return;
+    e.preventDefault(); e.dataTransfer.dropEffect='move';
+    var r=tr.getBoundingClientRect();
+    var before=e.clientY-r.top<r.height/2;
+    tr.classList.toggle('drop-before',before);
+    tr.classList.toggle('drop-after',!before);
+  });
+  tb.addEventListener('dragleave',function(e){
+    var tr=rowOf(e); if(tr) tr.classList.remove('drop-before','drop-after');
+  });
+  tb.addEventListener('drop',function(e){
+    if(dragId==null) return;
+    e.preventDefault();
+    var tr=rowOf(e); if(!tr) return;
+    var dst=+tr.getAttribute('data-id');
+    var r=tr.getBoundingClientRect();
+    var before=e.clientY-r.top<r.height/2;
+    if(dst&&dst!==dragId&&LAST){
+      var ids=LAST.tasks.map(function(t){return t.id;}).filter(function(i){return i!==dragId;});
+      var idx=ids.indexOf(dst);
+      if(idx>=0){
+        ids.splice(before?idx:idx+1,0,dragId);
+        var byId={}; LAST.tasks.forEach(function(t){byId[t.id]=t;});
+        LAST.tasks=ids.map(function(i){return byId[i];});
+        render(LAST);      // 乐观更新：先按新顺序渲染，保存失败由 load() 回滚
+        saveReorder(ids);
+      }
+    }
+  });
+  tb.addEventListener('dragend',function(){
+    dragId=null; dragBusy=false;
+    Array.prototype.forEach.call(tb.querySelectorAll('tr'),function(x){
+      x.classList.remove('dragging','drop-before','drop-after');
+    });
+    load();
+  });
+})();
 function taskById(id){ return TASKS.find(function(t){return t.id===id;}) || {}; }
 function openEdit(id){
   editingId=id; $('editErr').textContent=''; $('editTitle').textContent=id?'编辑任务':'新建任务';

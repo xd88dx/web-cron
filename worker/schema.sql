@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   last_duration_ms INTEGER,
   last_error TEXT,
   success_count INTEGER NOT NULL DEFAULT 0,
-  fail_count INTEGER NOT NULL DEFAULT 0
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS history (

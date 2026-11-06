@@ -44,6 +44,9 @@ export interface Task {
   last_challenge: number;
   success_count: number;
   fail_count: number;
+
+  // 列表显示排序（拖拽排序持久化，小值在前；旧数据 0 时按 id 兜底）
+  sort_order: number;
 }
 
 export interface HistoryEntry {

@@ -71,6 +71,7 @@ tr:hover td{background:#fafbfd}
 .fieldset{border:1px dashed var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:#fcfcff}
 .fieldset legend{font-size:12px;font-weight:700;color:var(--purple);padding:0 6px}
 .mfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+#editOverlay .mfoot,#logOverlay .mfoot{position:sticky;bottom:0;background:var(--card);margin:18px -24px -22px;padding:14px 24px 22px;z-index:1}
 .err{color:var(--red);font-size:12px;min-height:16px;margin-top:6px}
 .histok{color:var(--green);font-weight:700}
 .histfail{color:var(--red);font-weight:700}
@@ -163,7 +164,7 @@ td .muted{margin-top:3px}
     <div class="frow"><label>请求头（每行 Key: Value，或 JSON 对象，可覆盖默认浏览器头）</label><textarea id="fHeaders" placeholder="Authorization: Bearer xxx"></textarea></div>
     <div class="frow"><label>请求体 Body（非 GET 时生效，可选）</label><textarea id="fBody" placeholder="{&quot;keepalive&quot;: true}"></textarea></div>
     <div class="err" id="editErr"></div>
-    <div class="mfoot"><button onclick="closeEdit()">取消</button><button class="primary" id="btnSave">保存</button></div>
+    <div class="mfoot"><button onclick="tryCloseEdit()">取消</button><button class="primary" id="btnSave">保存</button></div>
   </div>
 </div>
 
@@ -366,8 +367,29 @@ function openEdit(id){
   $('fStype').dispatchEvent(new Event('change'));
   onModeChange();
   $('editOverlay').classList.add('show');
+  editSnapshot = formSnapshot();
 }
-function closeEdit(){ $('editOverlay').classList.remove('show'); editingId=null; }
+// 编辑弹窗：有未保存改动时，点遮罩 / Esc / 取消 都先二次确认，避免误关丢输入。
+var editSnapshot = null;
+function formSnapshot(){
+  var els = document.querySelectorAll('#editOverlay input, #editOverlay select, #editOverlay textarea');
+  var out = [];
+  for(var i=0;i<els.length;i++){
+    var e = els[i];
+    out.push([e.id||e.name||('x'+i), e.type === 'checkbox' ? (e.checked ? '1' : '0') : e.value]);
+  }
+  return JSON.stringify(out);
+}
+function editDirty(){
+  var el = document.getElementById('editOverlay');
+  if(!el || !el.classList.contains('show') || editSnapshot === null) return false;
+  return formSnapshot() !== editSnapshot;
+}
+function tryCloseEdit(){
+  if(editDirty() && !confirm('有未保存的修改，确定要关闭吗？')) return;
+  closeEdit();
+}
+function closeEdit(){ $('editOverlay').classList.remove('show'); editingId=null; editSnapshot=null; }
 function save(){
   var payload={ name:$('fName').value, url:$('fUrl').value, method:$('fMethod').value,
     timeout_seconds:+$('fTimeout').value, retries:+$('fRetries').value,
@@ -468,7 +490,7 @@ setInterval(load,15000);
     return !!(el && el.classList.contains('show'));
   }
   function closeOverlay(el){
-    if(el.id === 'editOverlay' && typeof closeEdit === 'function'){ closeEdit(); return; }
+    if(el.id === 'editOverlay' && typeof tryCloseEdit === 'function'){ tryCloseEdit(); return; }
     el.classList.remove('show');
   }
   document.addEventListener('mousedown', function(e){

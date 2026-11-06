@@ -79,7 +79,7 @@ tr:hover td{background:#fafbfd}
 </head>
 <body>
 <header>
-  <div class="brand">⏰ web-cron <small>多功能定时任务调度器 · Node 版</small></div>
+  <div class="brand">⏰ web-cron <small>多功能定时任务调度器</small></div>
   <div class="hd-actions">
     <span id="bStatus" class="bstatus no">浏览器仿真：探测中…</span>
     <button id="btnExport">导出备份</button>
@@ -122,7 +122,7 @@ tr:hover td{background:#fafbfd}
     <div class="frow"><label>访问方式 *</label>
       <select id="fMode" onchange="onModeChange()">
         <option value="http">🌐 HTTP 请求（普通站点，轻量快速）</option>
-        <option value="browser">🧭 浏览器仿真（个别有反爬的站点，真实 Chromium）</option>
+        <option value="browser">🧭 浏览器仿真（反爬站点，真实模拟）</option>
       </select>
     </div>
     <div class="frow" id="fallbackBox"><label class="checkline"><input type="checkbox" id="fFallback"> HTTP 遇 403/429/503 或挑战页时，自动升级为浏览器仿真重试一次</label></div>

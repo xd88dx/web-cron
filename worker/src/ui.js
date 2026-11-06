@@ -66,7 +66,7 @@ tr:hover td{background:#fafbfd}
 </head>
 <body>
 <header>
-  <div class="brand">⏰ web-cron <small>多功能定时任务调度器 · Worker 版</small></div>
+  <div class="brand">⏰ web-cron <small>多功能定时任务调度器</small></div>
   <div class="hd-actions">
     <button id="btnExport">导出备份</button>
     <button id="btnImport">导入备份</button>

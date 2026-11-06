@@ -102,7 +102,7 @@ td .muted{margin-top:3px}
   </section>
 </main>
 
-<div class="overlay" id="editOverlay">
+<div class="overlay" id="editOverlay" data-dismiss="outside">
   <div class="modal">
     <h3 id="editTitle">新建任务</h3>
     <div class="frow"><label>任务名称 *</label><input id="fName" placeholder="例：站点保活"></div>
@@ -128,7 +128,7 @@ td .muted{margin-top:3px}
   </div>
 </div>
 
-<div class="overlay" id="logOverlay">
+<div class="overlay" id="logOverlay" data-dismiss="outside">
   <div class="modal" style="max-width:760px">
     <h3 id="logTitle">执行日志</h3>
     <div id="logBody"></div>
@@ -359,6 +359,37 @@ $('importFile').onchange=async function(ev){
 };
 load();
 setInterval(load,15000);
+
+// 弹窗：点击遮罩空白区关闭，避免长日志必须滚到底部才能点「关闭」。
+// 仅带 data-dismiss="outside" 的遮罩生效；登录框不带 —— 关掉后没有入口重新登录。
+// mousedown + click 双判据：防止「在弹窗内容里按下、拖到遮罩松开」被误判成点外部。
+(function(){
+  var downOnBackdrop = false;
+  function loginVisible(){
+    var el = document.getElementById('loginOverlay');
+    return !!(el && el.classList.contains('show'));
+  }
+  function closeOverlay(el){
+    if(el.id === 'editOverlay' && typeof closeEdit === 'function'){ closeEdit(); return; }
+    el.classList.remove('show');
+  }
+  document.addEventListener('mousedown', function(e){
+    downOnBackdrop = !!(e.target && e.target.classList && e.target.classList.contains('overlay'));
+  });
+  document.addEventListener('click', function(e){
+    if(!downOnBackdrop) return;
+    downOnBackdrop = false;
+    var el = e.target;
+    if(!el || !el.classList || !el.classList.contains('overlay')) return;
+    if(el.getAttribute('data-dismiss') !== 'outside' || loginVisible()) return;
+    closeOverlay(el);
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key !== 'Escape' || loginVisible()) return;
+    var list = document.querySelectorAll('.overlay.show[data-dismiss="outside"]');
+    if(list.length) closeOverlay(list[list.length - 1]);
+  });
+})();
 </script>
 </body>
 </html>`;

@@ -60,6 +60,7 @@ tr:hover td{background:#fafbfd}
 .frow label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px;font-weight:600}
 .frow input,.frow select,.frow textarea{width:100%;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;font-family:inherit;background:#fff;color:var(--txt)}
 .frow textarea{resize:vertical;min-height:60px}
+.frow input:disabled,.frow select:disabled,.frow textarea:read-only{background:var(--gray-bg);color:var(--muted);cursor:not-allowed}
 .frow input[type=checkbox]{width:auto;margin-right:6px}
 .checkline{display:flex;align-items:center;font-size:13px;gap:2px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -119,6 +120,7 @@ tr:hover td{background:#fafbfd}
       <div class="frow"><label>超时（秒，1-120）</label><input id="fTimeout" type="number" value="30" min="1" max="120"></div>
       <div class="frow"><label>失败重试（0-5）</label><input id="fRetries" type="number" value="0" min="0" max="5"></div>
     </div>
+    <div class="frow hidden" id="browserOnlyHint"><div class="muted">浏览器仿真固定以 GET 导航、不携带请求体。</div></div>
     <div class="frow"><label>访问方式 *</label>
       <select id="fMode" onchange="onModeChange()">
         <option value="http">🌐 HTTP 请求（普通站点，轻量快速）</option>
@@ -129,10 +131,10 @@ tr:hover td{background:#fafbfd}
     <div class="fieldset hidden" id="browserBox">
       <legend>🧭 浏览器仿真选项</legend>
       <div class="grid2">
-        <div class="frow"><label>导航等待策略</label><select id="fWaitUntil"><option value="domcontentloaded">domcontentloaded</option><option value="load">load</option><option value="networkidle">networkidle</option><option value="commit">commit</option></select></div>
+        <div class="frow"><label>导航等待策略</label><select id="fWaitUntil"><option value="domcontentloaded">domcontentloaded（DOM 就绪）</option><option value="load">load（资源加载完）</option><option value="commit">commit（响应头返回）</option><option value="networkidle">networkidle（网络空闲）</option></select></div>
         <div class="frow"><label>额外停留（毫秒，0-30000，随机化模拟阅读）</label><input id="fDwell" type="number" value="0" min="0" max="30000"></div>
       </div>
-      <div class="frow"><label>等待元素出现（CSS 选择器，可选）</label><input id="fWaitSelector" placeholder="#app / .content"></div>
+      <div class="frow"><label>等待元素出现（可选，CSS 选择器）</label><input id="fWaitSelector" placeholder="#app / .content"></div>
       <div class="frow"><label>成功断言（可选；CSS 选择器 / text:包含文本 / js:表达式）</label><input id="fAssert" placeholder="text:欢迎 或 #dashboard 或 js:document.title.includes('OK')"></div>
       <div class="grid2">
         <div class="frow"><label>任务级代理（可选）</label><input id="fProxy" placeholder="socks5://127.0.0.1:1080"></div>
@@ -213,6 +215,11 @@ function onModeChange(){
   var b=$('fMode').value==='browser';
   $('browserBox').classList.toggle('hidden',!b);
   $('fallbackBox').classList.toggle('hidden',b);
+  // 浏览器模式：page.goto 固定 GET 且不能携带 body，这两项不生效 -> 置为只读。
+  // <select> 没有 readonly 属性，只能用 disabled；disabled 元素的 .value 仍可读，save() 不受影响。
+  $('fMethod').disabled=b;
+  $('fBody').readOnly=b;
+  $('browserOnlyHint').classList.toggle('hidden',!b);
 }
 function schedText(t){ return t.schedule_type==='cron' ? 'cron: '+t.cron_expr : '每 '+t.interval_minutes+' 分钟'; }
 function modeBadge(t){

@@ -31,6 +31,11 @@ function makeTask(id: number, f: TaskFields, now: number): Task {
   };
 }
 
+// 备份结构：导出与 Gist 上传共用；只含任务配置，不含执行历史
+function exportPayload() {
+  return { app: "web-cron-node", version: 1, exported_at: Date.now(), tasks: read().tasks };
+}
+
 // ------------------------------------------------------------------ 通用响应 / CORS / 认证
 
 function json(reply: any, data: unknown, status = 200) {
@@ -187,10 +192,106 @@ app.get("/api/tasks/:id/history", async (req, reply) => {
 });
 
 app.get("/api/export", async (_req, reply) => {
-  return json(reply, {
-    app: "web-cron-node", version: 1, exported_at: Date.now(),
-    tasks: read().tasks,
-  });
+  return json(reply, exportPayload());
+});
+
+// --------------------------------------------------------------------------- Gist 同步
+// 上传 / 下载的都只是任务配置（与导出备份同一结构），执行历史永远不参与同步。
+
+const GIST_API = "https://api.github.com/gists";
+const GIST_FILE = "web-cron.json";
+
+function gistHeaders(token: string): Record<string, string> {
+  return {
+    "authorization": `Bearer ${token}`,
+    "accept": "application/vnd.github+json",
+    "user-agent": "web-cron",
+    "content-type": "application/json",
+  };
+}
+
+async function gistError(r: Response): Promise<string> {
+  if (r.status === 401) return "GitHub Token 无效或缺少 gist 权限";
+  if (r.status === 403) return "GitHub API 拒绝访问（可能限流，或 Token 无 gist 权限）";
+  if (r.status === 404) return "Gist 不存在，请检查 Gist ID";
+  return "GitHub API HTTP " + r.status;
+}
+
+app.get("/api/gist", async (_req, reply) => {
+  return json(reply, read().gist);
+});
+
+app.put("/api/gist", async (req, reply) => {
+  const d = (req.body || {}) as any;
+  const token = String(d.token || "").trim();
+  const gist_id = String(d.gist_id || "").trim();
+  await mutate((st) => { st.gist = { token, gist_id }; });
+  return json(reply, { ok: true });
+});
+
+// 上传：无 gist_id 时自动创建私密 Gist 并把 id 回写到本地配置
+app.post("/api/gist/push", async (_req, reply) => {
+  const g = read().gist;
+  if (!g.token) return fail(reply, "请先填写 GitHub Token（classic PAT，勾选 gist 权限）");
+  const content = JSON.stringify(exportPayload(), null, 2);
+  try {
+    const r = g.gist_id
+      ? await fetch(`${GIST_API}/${g.gist_id}`, {
+          method: "PATCH", headers: gistHeaders(g.token),
+          body: JSON.stringify({ files: { [GIST_FILE]: { content } } }),
+        })
+      : await fetch(GIST_API, {
+          method: "POST", headers: gistHeaders(g.token),
+          body: JSON.stringify({
+            description: "web-cron", public: false,
+            files: { [GIST_FILE]: { content } },
+          }),
+        });
+    if (!r.ok) return fail(reply, await gistError(r), 502);
+    const j = await r.json() as any;
+    const gist_id = String(j.id || g.gist_id || "");
+    if (gist_id !== g.gist_id) await mutate((st) => { st.gist = { ...st.gist, gist_id }; });
+    return json(reply, { ok: true, created: !g.gist_id, gist_id, html_url: j.html_url || "" });
+  } catch (e: any) {
+    return fail(reply, "无法访问 GitHub API：" + String(e?.message || e), 502);
+  }
+});
+
+// 下载：用 Gist 备份覆盖本地任务。本地执行历史保留，新任务用全新 id（seqTask 续号），不与旧日志混淆
+app.post("/api/gist/pull", async (_req, reply) => {
+  const g = read().gist;
+  if (!g.token) return fail(reply, "请先填写 GitHub Token（classic PAT，勾选 gist 权限）");
+  if (!g.gist_id) return fail(reply, "还没有 Gist ID，可先执行「上传到 Gist」自动创建");
+  try {
+    const r = await fetch(`${GIST_API}/${g.gist_id}`, { headers: gistHeaders(g.token) });
+    if (!r.ok) return fail(reply, await gistError(r), 502);
+    const j = await r.json() as any;
+    const content = j?.files?.[GIST_FILE]?.content;
+    if (typeof content !== "string" || !content) return fail(reply, `Gist 中没有找到 ${GIST_FILE}`);
+    let d: any;
+    try { d = JSON.parse(content); } catch { return fail(reply, "Gist 备份内容不是合法 JSON"); }
+    const tasks = Array.isArray(d?.tasks) ? d.tasks : [];
+    if (!tasks.length) return fail(reply, "Gist 备份中没有任务数据");
+    const now = Date.now();
+    let imported = 0, skipped = 0;
+    await mutate((store) => {
+      store.tasks = [];
+      for (const raw of tasks) {
+        let f: TaskFields;
+        try { f = validateTask(raw); } catch { skipped++; continue; }
+        store.seqTask += 1;
+        const t = makeTask(store.seqTask, f, now);
+        t.enabled = raw.enabled === 0 ? 0 : 1;
+        if (!t.enabled) t.next_run_at = null;
+        t.sort_order = Number(raw.sort_order) > 0 ? Number(raw.sort_order) : imported + 1;
+        store.tasks.push(t);
+        imported++;
+      }
+    });
+    return json(reply, { ok: true, imported, skipped });
+  } catch (e: any) {
+    return fail(reply, "下载失败：" + String(e?.message || e), 502);
+  }
 });
 
 app.post("/api/import", async (req, reply) => {

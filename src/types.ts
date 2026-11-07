@@ -14,6 +14,8 @@ export interface Task {
   schedule_type: ScheduleType;
   interval_minutes: number | null;
   cron_expr: string | null;
+  // 随机加时（分钟）：每次触发前在 0~N 内取随机数累加到固定触发时间，0 = 关闭
+  jitter_minutes: number;
   timeout_seconds: number;
   retries: number;
   enabled: number;
@@ -83,12 +85,19 @@ export interface ExecResult {
   note: string;
 }
 
+export interface GistConfig {
+  token: string;
+  gist_id: string;
+}
+
 export interface StoreData {
   version: number;
   seqTask: number;
   seqHistory: number;
   tasks: Task[];
   history: HistoryEntry[];
+  // Gist 同步配置（token / gist_id），随 store.json 持久化
+  gist: GistConfig;
 }
 
 export interface StoreStats {

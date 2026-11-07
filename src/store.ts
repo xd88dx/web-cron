@@ -4,14 +4,20 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
-import type { StoreData, Task, HistoryEntry, StoreStats } from "./types.js";
+import type { StoreData, Task, HistoryEntry, StoreStats, GistConfig } from "./types.js";
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
 const FILE = path.join(DATA_DIR, "store.json");
 export const HISTORY_KEEP = 200;
 
 function empty(): StoreData {
-  return { version: 1, seqTask: 0, seqHistory: 0, tasks: [], history: [] };
+  return { version: 1, seqTask: 0, seqHistory: 0, tasks: [], history: [], gist: { token: "", gist_id: "" } };
+}
+
+// Gist 同步配置：旧数据没有该字段时补默认值
+function normalizeGist(raw: any): GistConfig {
+  const g = raw && typeof raw === "object" ? raw : {};
+  return { token: String(g.token || ""), gist_id: String(g.gist_id || "") };
 }
 
 // 读取旧数据时补齐新增字段，保证升级不丢任务
@@ -19,6 +25,7 @@ export function taskDefaults(): Omit<Task, "id" | "name" | "url"> {
   return {
     method: "GET", headers: "", body: "",
     schedule_type: "interval", interval_minutes: 5, cron_expr: null,
+    jitter_minutes: 0,
     timeout_seconds: 30, retries: 0, enabled: 1,
     mode: "http", browser_wait_until: "domcontentloaded",
     browser_wait_selector: "", browser_assert: "", browser_dwell_ms: 0,
@@ -67,6 +74,7 @@ export function initStore(): void {
         seqTask: Number(raw.seqTask) || tasks.reduce((m, t) => Math.max(m, t.id), 0),
         seqHistory: Number(raw.seqHistory) || history.reduce((m, h) => Math.max(m, h.id), 0),
         tasks, history,
+        gist: normalizeGist(raw.gist),
       };
     } catch (e) {
       // 文件损坏时不静默丢数据：备份后从空库启动

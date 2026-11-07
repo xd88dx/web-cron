@@ -24,6 +24,8 @@
 
 - 任务增删改、启停、立即执行、执行日志、统计面板、JSON 导出/导入
 - 调度：固定间隔（每 N 分钟）或 5 段式 cron 表达式（带校验、按 `APP_TIMEZONE` 判定时区）
+- **随机加时**：每任务可设 0~N 分钟，每次触发前随机取值累加到固定触发时间（间隔与 Cron 均生效），避免固定规律
+- **Gist 同步**：面板右上角一键把任务配置上传到 GitHub 私密 Gist / 从 Gist 恢复（覆盖任务，历史保留），用于多实例间同步；只同步任务配置，不同步执行历史
 - 请求：GET/POST/PUT/DELETE/HEAD/PATCH、自定义请求头、请求体、超时、失败重试
 - **双模式**（每个任务独立配置）：
   - `🌐 HTTP`：Node fetch + 固定真实浏览器 UA + 完整浏览器头（Accept-Language / sec-ch-ua 版本对齐 / Sec-Fetch-*）
@@ -150,6 +152,7 @@ PANEL_PASSWORD=your-password PORT=$PORT npm start
 ## 调度与并发
 
 - 每 5 秒检查一次到期任务；**先占坑**：取到任务立即把 `next_run_at` 推进到下次，再异步执行，慢任务跨触发窗口也不会重复执行
+- 开启「随机加时」的任务，每次推进 `next_run_at` 时在 `[固定下次时间, 固定下次时间 + N 分钟)` 内随机取值，每次触发重新随机
 - HTTP 任务在 Node 事件循环内并发；浏览器任务经共享 Chromium 的信号量限流（默认 2）
 - 单进程运行。**不要起多个 worker / 多个容器副本**（会各自跑一份调度器导致重复执行）；需要多副本时须外置分布式锁
 - 常驻 Chromium 约 150–300MB，每 context 约 +30–80MB；10 任务 / 每 5 分钟在 2GB 内存 VPS 上够用
@@ -186,7 +189,7 @@ Client Hints 会被置空（Chromium 无法真正删除该头），`navigator.us
 ## 验证
 
 ```bash
-npm run build && npm test     # 35 项纯逻辑单测（cron / 时区 / UA / 请求头 / 浏览器身份自洽 / 挑战页判定）
+npm run build && npm test     # 37 项纯逻辑单测（cron / 时区 / 随机加时 / UA / 请求头 / 浏览器身份自洽 / 挑战页判定）
 ```
 
 端到端手动验证：创建 HTTP 任务 → 立即执行 → 查看日志；创建浏览器任务 → 确认 `navigator.webdriver` 被删除、Cookie 跨两次执行保留；把 `next_run_at` 改到过去触发定时链路；无 Chromium 环境确认降级路径。

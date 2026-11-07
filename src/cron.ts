@@ -6,6 +6,7 @@ export interface ScheduleLike {
   schedule_type: "cron" | "interval";
   cron_expr?: string | null;
   interval_minutes?: number | null;
+  jitter_minutes?: number | null;
 }
 
 export function tzParts(date: Date, tz: string) {
@@ -81,17 +82,22 @@ export function validateCron(expr: string): true {
 }
 
 // 计算任务在 afterTs 之后的下一次执行时间（毫秒时间戳）
+// 随机加时：jitter_minutes > 0 时，在 [0, N) 分钟内取随机毫秒数累加到固定触发时间上，
+// 每次调用（创建 / 编辑 / 启用 / 每次触发后的先占坑）都重新随机。
 export function computeNextRun(task: ScheduleLike, afterTs: number, tz: string): number {
+  let base: number;
   if (task.schedule_type === "cron") {
+    base = afterTs + 86400000; // 逐分钟扫描最多 7 天；低频 cron（如每月/每年）先按每天重算兜底
     let t = Math.floor(afterTs / 60000) * 60000 + 60000;
-    // 逐分钟扫描最多 7 天；低频 cron（如每月/每年）先按每天重算兜底
     for (let i = 0; i < 60 * 24 * 7; i++, t += 60000) {
-      if (cronMatches(String(task.cron_expr || ""), new Date(t), tz)) return t;
+      if (cronMatches(String(task.cron_expr || ""), new Date(t), tz)) { base = t; break; }
     }
-    return afterTs + 86400000;
+  } else {
+    const mins = Math.max(1, Number(task.interval_minutes) || 1);
+    base = Math.floor(afterTs / 60000) * 60000 + mins * 60000;
   }
-  const mins = Math.max(1, Number(task.interval_minutes) || 1);
-  return Math.floor(afterTs / 60000) * 60000 + mins * 60000;
+  const jitter = Math.max(0, Number(task.jitter_minutes) || 0);
+  return jitter > 0 ? base + Math.floor(Math.random() * jitter * 60000) : base;
 }
 
 export function fmtTs(ts: number | null | undefined, tz: string): string {

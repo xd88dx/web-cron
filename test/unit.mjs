@@ -59,6 +59,25 @@ t("computeNextRun interval", () => {
   const next = computeNextRun({ schedule_type: "interval", interval_minutes: 5 }, after, "Asia/Shanghai");
   assert.equal(next, after + 5 * 60000);
 });
+t("computeNextRun 随机加时：0/缺省关闭，N>0 落在 [base, base+N) 且每次重新随机", () => {
+  const after = Date.UTC(2026, 10, 5, 2, 0, 0);
+  const base = computeNextRun({ schedule_type: "interval", interval_minutes: 5 }, after, "Asia/Shanghai");
+  assert.equal(computeNextRun({ schedule_type: "interval", interval_minutes: 5, jitter_minutes: 0 }, after, "Asia/Shanghai"), base);
+  assert.equal(computeNextRun({ schedule_type: "interval", interval_minutes: 5 }, after, "Asia/Shanghai"), base);
+  const got = new Set();
+  for (let i = 0; i < 50; i++) {
+    const next = computeNextRun({ schedule_type: "interval", interval_minutes: 5, jitter_minutes: 3 }, after, "Asia/Shanghai");
+    assert.ok(next >= base && next < base + 3 * 60000, "next=" + next + " base=" + base);
+    got.add(next);
+  }
+  assert.ok(got.size > 1, "随机加时应产生不同触发时间，实际 " + got.size);
+});
+t("computeNextRun 随机加时对 cron 同样生效", () => {
+  const after = Date.UTC(2026, 10, 5, 2, 0, 0); // 11-05 10:00 CST
+  const base = computeNextRun({ schedule_type: "cron", cron_expr: "0 9 * * *" }, after, "Asia/Shanghai");
+  const next = computeNextRun({ schedule_type: "cron", cron_expr: "0 9 * * *", jitter_minutes: 10 }, after, "Asia/Shanghai");
+  assert.ok(next >= base && next < base + 10 * 60000, "next=" + next + " base=" + base);
+});
 t("computeNextRun 每天 9 点跨日", () => {
   const after = Date.UTC(2026, 10, 5, 2, 0, 0); // 11-05 10:00 CST
   const next = computeNextRun({ schedule_type: "cron", cron_expr: "0 9 * * *" }, after, "Asia/Shanghai");

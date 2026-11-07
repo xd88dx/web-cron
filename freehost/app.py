@@ -71,6 +71,7 @@ def init_db():
                 schedule_type TEXT NOT NULL DEFAULT 'interval',
                 interval_minutes INTEGER,
                 cron_expr TEXT,
+                jitter_minutes INTEGER NOT NULL DEFAULT 0,
                 timeout_seconds INTEGER NOT NULL DEFAULT 30,
                 retries INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
@@ -96,14 +97,21 @@ def init_db():
                 error TEXT,
                 snippet TEXT
             );
+            CREATE TABLE IF NOT EXISTS settings(
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_history_task ON history(task_id, id DESC);
             """
         )
-        # 旧库平滑迁移：tasks 缺 sort_order 列时自动补上（新库由建表语句直接包含）
+        # 旧库平滑迁移：tasks 缺列时自动补上（新库由建表语句直接包含）
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(tasks)")]
         if "sort_order" not in cols:
             conn.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
             app.logger.info("已迁移：tasks 表新增 sort_order 列")
+        if "jitter_minutes" not in cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN jitter_minutes INTEGER NOT NULL DEFAULT 0")
+            app.logger.info("已迁移：tasks 表新增 jitter_minutes 列")
         conn.commit()
 
 
@@ -119,11 +127,17 @@ scheduler = BackgroundScheduler(timezone=APP_TIMEZONE)
 def schedule_task(row):
     """按任务配置注册/更新 APScheduler 任务"""
     job_id = "task_%s" % row["id"]
+    # 随机加时：APScheduler 的 jitter 在每次计算下次触发时间时，于 [0, jitter] 秒内
+    # 取随机值累加到固定触发时间上（BaseTrigger._apply_jitter / uniform(0, jitter)），
+    # 与完整版 computeNextRun 的「0~N 分钟随机加时」语义一致。
+    jitter = int(row["jitter_minutes"] or 0) * 60
     if row["schedule_type"] == "cron":
         trigger = CronTrigger.from_crontab(row["cron_expr"], timezone=APP_TIMEZONE)
+        if jitter:
+            trigger.jitter = jitter  # from_crontab 不收 jitter，按其内部字段名补上
     else:
         trigger = IntervalTrigger(
-            minutes=int(row["interval_minutes"]), timezone=APP_TIMEZONE
+            minutes=int(row["interval_minutes"]), timezone=APP_TIMEZONE, jitter=jitter
         )
     scheduler.add_job(
         execute_task,
@@ -380,6 +394,7 @@ def validate_payload(data):
     try:
         timeout = min(120, max(1, int(data.get("timeout_seconds") or 30)))
         retries = min(5, max(0, int(data.get("retries") or 0)))
+        jitter = min(1440, max(0, int(data.get("jitter_minutes") or 0)))
     except (TypeError, ValueError):
         return None, "超时/重试次数无效"
     return dict(
@@ -387,7 +402,7 @@ def validate_payload(data):
         headers=(data.get("headers") or "").strip(),
         body=data.get("body") or "",
         schedule_type=st, interval_minutes=minutes, cron_expr=expr,
-        timeout_seconds=timeout, retries=retries,
+        jitter_minutes=jitter, timeout_seconds=timeout, retries=retries,
     ), None
 
 
@@ -431,12 +446,12 @@ def create_task():
             "SELECT COALESCE(MAX(sort_order),0) m FROM tasks").fetchone()["m"] or 0) + 1
         cur = conn.execute(
             "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
-            "interval_minutes,cron_expr,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?)",
+            "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)",
             (fields["name"], fields["url"], fields["method"], fields["headers"],
              fields["body"], fields["schedule_type"], fields["interval_minutes"],
-             fields["cron_expr"], fields["timeout_seconds"], fields["retries"],
-             next_sort, now, now),
+             fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
+             fields["retries"], next_sort, now, now),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -477,12 +492,12 @@ def update_task(task_id):
     with closing(db()) as conn:
         cur = conn.execute(
             "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,"
-            "interval_minutes=?,cron_expr=?,timeout_seconds=?,retries=?,updated_at=?"
+            "interval_minutes=?,cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,updated_at=?"
             " WHERE id=?",
             (fields["name"], fields["url"], fields["method"], fields["headers"],
              fields["body"], fields["schedule_type"], fields["interval_minutes"],
-             fields["cron_expr"], fields["timeout_seconds"], fields["retries"],
-             now, task_id),
+             fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
+             fields["retries"], now, task_id),
         )
         conn.commit()
         if cur.rowcount == 0:
@@ -570,12 +585,12 @@ def import_data():
             so += 1
             cur = conn.execute(
                 "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
-                "interval_minutes,cron_expr,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
+                "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
                 " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (fields["name"], fields["url"], fields["method"], fields["headers"],
                  fields["body"], fields["schedule_type"], fields["interval_minutes"],
-                 fields["cron_expr"], fields["timeout_seconds"], fields["retries"],
-                 1 if t.get("enabled", 1) else 0, so, now, now),
+                 fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
+                 fields["retries"], 1 if t.get("enabled", 1) else 0, so, now, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone()
@@ -583,6 +598,179 @@ def import_data():
                 schedule_task(row)
             imported += 1
     return jsonify(ok=True, imported=imported, skipped=skipped)
+
+
+# ---------------------------------------------------------------------- Gist 同步
+# 上传 / 下载的都只是任务配置（与导出备份同一结构），执行历史永远不参与同步。
+# Gist Token / Gist ID 存在 settings 表（key=gist，值为 JSON 字符串）。
+
+GIST_API = "https://api.github.com/gists"
+GIST_FILE = "web-cron.json"
+
+
+def get_setting(key, default=""):
+    with closing(db()) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key, value):
+    with closing(db()) as conn:
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES(?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+
+
+def gist_config():
+    try:
+        g = json.loads(get_setting("gist") or "{}") or {}
+    except Exception:
+        g = {}
+    return {"token": str(g.get("token") or ""), "gist_id": str(g.get("gist_id") or "")}
+
+
+def gist_request(method, url, token, payload=None):
+    """调用 GitHub Gist API，返回 (http_status, 解析后的 dict)；网络异常向上抛"""
+    headers = {
+        "Authorization": "Bearer %s" % token,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "web-cron",
+        "Content-Type": "application/json",
+    }
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urlrequest.Request(url, data=data, method=method, headers=headers)
+    try:
+        with _opener.open(req, timeout=30) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except HTTPError as e:
+        return e.code, {}
+
+
+def gist_api_error(status):
+    if status == 401:
+        return "GitHub Token 无效或缺少 gist 权限"
+    if status == 403:
+        return "GitHub API 拒绝访问（可能限流，或 Token 无 gist 权限）"
+    if status == 404:
+        return "Gist 不存在，请检查 Gist ID"
+    return "GitHub API HTTP %s" % status
+
+
+@app.get("/api/gist")
+def gist_get():
+    return jsonify(**gist_config())
+
+
+@app.put("/api/gist")
+def gist_put():
+    data = request.get_json(force=True, silent=True) or {}
+    set_setting("gist", json.dumps({
+        "token": (data.get("token") or "").strip(),
+        "gist_id": (data.get("gist_id") or "").strip(),
+    }))
+    return jsonify(ok=True)
+
+
+@app.post("/api/gist/push")
+def gist_push():
+    g = gist_config()
+    if not g["token"]:
+        return jsonify(error="请先填写 GitHub Token（classic PAT，勾选 gist 权限）"), 400
+    with closing(db()) as conn:
+        tasks = [dict(r) for r in conn.execute("SELECT * FROM tasks ORDER BY id")]
+    content = json.dumps(
+        dict(app="web-cron", version=1, exported_at=now_str(), tasks=tasks),
+        ensure_ascii=False, indent=2,
+    )
+    files = {GIST_FILE: {"content": content}}
+    try:
+        if g["gist_id"]:
+            status, j = gist_request(
+                "PATCH", GIST_API + "/" + g["gist_id"], g["token"], {"files": files})
+        else:
+            status, j = gist_request(
+                "POST", GIST_API, g["token"],
+                {"description": "web-cron", "public": False, "files": files})
+    except Exception as e:
+        return jsonify(error="无法访问 GitHub API：%s" % e), 502
+    if status >= 300:
+        return jsonify(error=gist_api_error(status)), 502
+    gist_id = str((j or {}).get("id") or g["gist_id"] or "")
+    if gist_id != g["gist_id"]:
+        set_setting("gist", json.dumps({"token": g["token"], "gist_id": gist_id}))
+    return jsonify(ok=True, created=not g["gist_id"], gist_id=gist_id,
+                   html_url=(j or {}).get("html_url") or "")
+
+
+@app.post("/api/gist/pull")
+def gist_pull():
+    g = gist_config()
+    if not g["token"]:
+        return jsonify(error="请先填写 GitHub Token（classic PAT，勾选 gist 权限）"), 400
+    if not g["gist_id"]:
+        return jsonify(error="还没有 Gist ID，可先执行「上传到 Gist」自动创建"), 400
+    try:
+        status, j = gist_request("GET", GIST_API + "/" + g["gist_id"], g["token"])
+    except Exception as e:
+        return jsonify(error="无法访问 GitHub API：%s" % e), 502
+    if status >= 300:
+        return jsonify(error=gist_api_error(status)), 502
+    fobj = ((j or {}).get("files") or {}).get(GIST_FILE) or {}
+    content = fobj.get("content") or ""
+    if not content:
+        return jsonify(error="Gist 中没有找到 %s" % GIST_FILE), 400
+    try:
+        data = json.loads(content)
+    except Exception:
+        return jsonify(error="Gist 备份内容不是合法 JSON"), 400
+    tasks = data.get("tasks") if isinstance(data, dict) else None
+    if not isinstance(tasks, list) or not tasks:
+        return jsonify(error="Gist 备份中没有任务数据"), 400
+
+    # 先全部校验再动库：无有效任务直接拒绝，避免把现有任务清空后导入了个寂寞
+    prepared, skipped = [], 0
+    for t in tasks:
+        fields, err = validate_payload(t if isinstance(t, dict) else {})
+        if err:
+            skipped += 1
+            continue
+        prepared.append((fields, 1 if t.get("enabled", 1) else 0,
+                         t.get("sort_order") if isinstance(t.get("sort_order"), int)
+                         and t["sort_order"] > 0 else len(prepared) + 1))
+    if not prepared:
+        return jsonify(error="Gist 备份中没有可导入的任务"), 400
+
+    # 单事务覆盖：DELETE + 全部 INSERT 一次提交，中途失败自动回滚，原任务原样保留。
+    # 执行历史保留不动；新任务 id 由 AUTOINCREMENT 续号，不会与旧日志混淆。
+    with closing(db()) as conn:
+        old_ids = [r["id"] for r in conn.execute("SELECT id FROM tasks")]
+        try:
+            conn.execute("DELETE FROM tasks")
+            for fields, enabled, so in prepared:
+                now = now_str()
+                conn.execute(
+                    "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
+                    "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (fields["name"], fields["url"], fields["method"], fields["headers"],
+                     fields["body"], fields["schedule_type"], fields["interval_minutes"],
+                     fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
+                     fields["retries"], enabled, so, now, now),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    for tid in old_ids:
+        unschedule_task(tid)
+    with closing(db()) as conn:
+        rows = [dict(r) for r in conn.execute("SELECT * FROM tasks WHERE enabled=1")]
+    for row in rows:
+        schedule_task(row)
+    return jsonify(ok=True, imported=len(prepared), skipped=skipped)
 
 
 # -------------------------------------------------------------------------- 启动

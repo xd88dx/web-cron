@@ -66,6 +66,20 @@ t("computeNextRun: 间隔 5 分钟对齐到整分钟", () => {
   assert.equal(new Date(next).toISOString(), "2026-11-05T00:07:00.000Z");
 });
 
+t("computeNextRun: 随机加时 0/缺省关闭，N>0 落在 [base, base+N) 且每次重新随机", () => {
+  const after = Date.parse("2026-11-05T00:02:37Z");
+  const base = computeNextRun({ schedule_type: "interval", interval_minutes: 5 }, after, "UTC");
+  assert.equal(computeNextRun({ schedule_type: "interval", interval_minutes: 5, jitter_minutes: 0 }, after, "UTC"), base);
+  assert.equal(computeNextRun({ schedule_type: "interval", interval_minutes: 5 }, after, "UTC"), base);
+  const got = new Set();
+  for (let i = 0; i < 50; i++) {
+    const next = computeNextRun({ schedule_type: "interval", interval_minutes: 5, jitter_minutes: 3 }, after, "UTC");
+    assert.ok(next >= base && next < base + 3 * 60000, "next=" + next + " base=" + base);
+    got.add(next);
+  }
+  assert.ok(got.size > 1, "随机加时应产生不同触发时间，实际 " + got.size);
+});
+
 t("computeNextRun: cron 每 5 分钟 / 每天 9:00 上海", () => {
   const after = Date.parse("2026-11-05T00:02:37Z");
   assert.equal(

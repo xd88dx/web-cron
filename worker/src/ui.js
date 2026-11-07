@@ -57,7 +57,7 @@ tr:hover td{background:#fafbfd}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 .mfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
-#editOverlay .mfoot,#logOverlay .mfoot{position:sticky;bottom:0;background:var(--card);margin:18px -24px -22px;padding:14px 24px 22px;z-index:1}
+#editOverlay .mfoot,#logOverlay .mfoot,#gistOverlay .mfoot{position:sticky;bottom:0;background:var(--card);margin:18px -24px -22px;padding:14px 24px 22px;z-index:1}
 .err{color:var(--red);font-size:12px;min-height:16px;margin-top:6px}
 .histok{color:var(--green);font-weight:700}
 .histfail{color:var(--red);font-weight:700}
@@ -79,6 +79,7 @@ td .muted{margin-top:3px}
   <div class="hd-actions">
     <button id="btnExport">导出备份</button>
     <button id="btnImport">导入备份</button>
+    <button id="btnGist">Gist 同步</button>
     <button id="btnLogout" class="hidden">退出登录</button>
     <button id="btnNew" class="primary">＋ 新建任务</button>
   </div>
@@ -113,12 +114,13 @@ td .muted{margin-top:3px}
       <div class="frow"><label>超时（秒，1-120）</label><input id="fTimeout" type="number" value="30" min="1" max="120"></div>
       <div class="frow"><label>失败重试次数（0-5）</label><input id="fRetries" type="number" value="0" min="0" max="5"></div>
     </div>
-    <div class="frow"><label>调度方式</label>
-      <select id="fStype" onchange="document.getElementById('intervalBox').classList.toggle('hidden',this.value!=='interval');document.getElementById('cronBox').classList.toggle('hidden',this.value!=='cron')">
-        <option value="interval">固定间隔（每 N 分钟）</option><option value="cron">Cron 表达式（分 时 日 月 周）</option>
-      </select>
-    </div>
+    <div class="frow"><label>随机加时（分钟，0-1440，0=关闭）</label><input id="fJitter" type="number" value="0" min="0" max="1440"><div class="muted">每次触发前在 0~N 分钟内取随机数累加到固定触发时间，固定间隔与 Cron 均生效，每次触发重新随机</div></div>
     <div class="grid2">
+      <div class="frow"><label>调度方式</label>
+        <select id="fStype" onchange="document.getElementById('intervalBox').classList.toggle('hidden',this.value!=='interval');document.getElementById('cronBox').classList.toggle('hidden',this.value!=='cron')">
+          <option value="interval">固定间隔（每 N 分钟）</option><option value="cron">Cron 表达式（分 时 日 月 周）</option>
+        </select>
+      </div>
       <div class="frow" id="intervalBox"><label>间隔（分钟，≥1）</label><input id="fInterval" type="number" value="5" min="1"></div>
       <div class="frow hidden" id="cronBox"><label>Cron 表达式（5 段式，按设置时区判定）</label><input id="fCron" placeholder="*/5 * * * *"></div>
     </div>
@@ -134,6 +136,17 @@ td .muted{margin-top:3px}
     <h3 id="logTitle">执行日志</h3>
     <div id="logBody"></div>
     <div class="mfoot"><button onclick="document.getElementById('logOverlay').classList.remove('show')">关闭</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="gistOverlay" data-dismiss="outside">
+  <div class="modal" style="max-width:500px">
+    <h3>☁️ Gist 同步</h3>
+    <div class="muted" style="margin-bottom:12px">把任务配置备份到 GitHub 私密 Gist，在多个部署之间同步。</div>
+    <div class="frow"><label>GitHub Token（ghp_ xxx）</label><input id="gToken" placeholder="ghp_xxxxxxxx"></div>
+    <div class="frow"><label>Gist ID（留空即可，首次上传自动创建并回填）</label><input id="gGistId" placeholder="留空则上传时自动创建新 Gist"></div>
+    <div class="err" id="gistErr"></div>
+    <div class="mfoot"><button onclick="document.getElementById('gistOverlay').classList.remove('show')">取消</button><button id="btnGistSave">保存配置</button><button id="btnGistPull">⬇ 从 Gist 下载</button><button id="btnGistPush" class="primary">⬆ 上传到 Gist</button></div>
   </div>
 </div>
 
@@ -193,7 +206,7 @@ function render(d){
     return '<tr draggable="true" data-id="'+t.id+'">'+
       '<td>'+(t.enabled?'<span class="badge on">● 运行中</span>':'<span class="badge off">⏸ 已暂停</span>')+'</td>'+
       '<td><span class="tname">'+esc(t.name)+'</span><span class="turl" title="'+esc(t.url)+'">'+esc(t.method)+' '+esc(t.url)+'</span></td>'+
-      '<td>'+esc(schedText(t))+(t.retries>0?'<div class="muted">失败重试 '+t.retries+' 次</div>':'')+'</td>'+
+      '<td>'+esc(schedText(t))+(t.retries>0?'<div class="muted">失败重试 '+t.retries+' 次</div>':'')+(t.jitter_minutes>0?'<div class="muted">+ 随机 0~'+t.jitter_minutes+' 分钟</div>':'')+'</td>'+
       '<td>'+lastBadge(t)+'<div class="muted">'+esc(t.last_run_at_str||'')+'</div></td>'+
       '<td class="muted">'+(t.enabled?esc(t.next_run_at_str||'等待调度'):'—')+'</td>'+
       '<td><div class="ops">'+
@@ -287,6 +300,7 @@ function openEdit(id){
   $('fRetries').value=t.retries==null?0:t.retries;
   $('fStype').value=t.schedule_type||'interval';
   $('fInterval').value=t.interval_minutes==null?5:t.interval_minutes;
+  $('fJitter').value=t.jitter_minutes==null?0:t.jitter_minutes;
   $('fCron').value=t.cron_expr||''; $('fHeaders').value=t.headers||''; $('fBody').value=t.body||'';
   $('fStype').dispatchEvent(new Event('change'));
   $('editOverlay').classList.add('show');
@@ -317,6 +331,7 @@ async function save(){
   var payload={ name:$('fName').value, url:$('fUrl').value, method:$('fMethod').value,
     timeout_seconds:+$('fTimeout').value, retries:+$('fRetries').value,
     schedule_type:$('fStype').value, interval_minutes:+$('fInterval').value,
+    jitter_minutes:+$('fJitter').value||0,
     cron_expr:$('fCron').value, headers:$('fHeaders').value, body:$('fBody').value };
   try{
     if(editingId) await api('/api/tasks/'+editingId,{method:'PUT',body:JSON.stringify(payload)});
@@ -379,6 +394,42 @@ $('importFile').onchange=async function(ev){
   }catch(e){ toast('导入失败: '+e.message); }
   ev.target.value='';
 };
+// ---- Gist 同步：先保存弹窗里的配置再执行上传/下载，改完 Token 直接点即可 ----
+function closeGist(){ document.getElementById('gistOverlay').classList.remove('show'); }
+function openGist(){
+  $('gistErr').textContent='';
+  $('gistOverlay').classList.add('show');
+  api('/api/gist').then(function(g){
+    $('gToken').value=g.token||''; $('gGistId').value=g.gist_id||'';
+  }).catch(function(e){ $('gistErr').textContent=e.message; });
+}
+async function gistSaveCfg(){
+  await api('/api/gist',{method:'PUT',body:JSON.stringify({token:$('gToken').value,gist_id:$('gGistId').value})});
+}
+async function gistPush(){
+  try{
+    $('gistErr').textContent='';
+    await gistSaveCfg();
+    var r=await api('/api/gist/push',{method:'POST'});
+    $('gGistId').value=r.gist_id||$('gGistId').value;
+    toast(r.created?'已创建私密 Gist 并上传':'已上传到 Gist');
+  }catch(e){ $('gistErr').textContent=e.message; }
+}
+async function gistPull(){
+  if(!confirm('从 Gist 下载将覆盖当前全部任务（执行历史保留），确定？')) return;
+  try{
+    $('gistErr').textContent='';
+    await gistSaveCfg();
+    var r=await api('/api/gist/pull',{method:'POST'});
+    closeGist();
+    toast('已从 Gist 恢复：成功 '+r.imported+' 个，跳过 '+r.skipped+' 个');
+    load();
+  }catch(e){ $('gistErr').textContent=e.message; }
+}
+$('btnGist').onclick=openGist;
+$('btnGistSave').onclick=async function(){ try{ await gistSaveCfg(); toast('Gist 配置已保存'); }catch(e){ $('gistErr').textContent=e.message; } };
+$('btnGistPush').onclick=gistPush;
+$('btnGistPull').onclick=gistPull;
 load();
 setInterval(load,15000);
 

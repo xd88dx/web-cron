@@ -8,7 +8,7 @@ const WAIT_UNTILS: WaitUntil[] = ["commit", "domcontentloaded", "load", "network
 export type TaskFields = Pick<
   Task,
   | "name" | "url" | "method" | "headers" | "body"
-  | "schedule_type" | "interval_minutes" | "cron_expr"
+  | "schedule_type" | "interval_minutes" | "cron_expr" | "jitter_minutes"
   | "timeout_seconds" | "retries" | "mode"
   | "browser_wait_until" | "browser_wait_selector" | "browser_assert"
   | "browser_dwell_ms" | "browser_proxy" | "browser_ua"
@@ -55,6 +55,7 @@ export function validateTask(data: any): TaskFields {
     headers: String(d.headers || ""),
     body: String(d.body || ""),
     schedule_type, interval_minutes, cron_expr,
+    jitter_minutes: int(d.jitter_minutes, 0, 0, 1440),
     timeout_seconds: int(d.timeout_seconds, 30, 1, 120),
     retries: int(d.retries, 0, 0, 5),
     mode,

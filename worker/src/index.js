@@ -7,14 +7,23 @@ import { HTML } from "./ui.js";
 
 const HISTORY_KEEP = 200;
 
-// 旧库平滑迁移：tasks 缺 sort_order 列时自动补上（列已存在时报错被忽略）。
-// 新装库由 schema.sql 直接建好该列；已有部署首个请求/第一次调度时自动完成迁移。
+// 旧库平滑迁移：tasks 缺 sort_order / jitter_minutes 列时自动补上，settings 表不存在时
+// 自动创建（列/表已存在时报错被忽略）。新装库由 schema.sql 直接建好；
+// 已有部署首个请求/第一次调度时自动完成迁移。
 let schemaReady = null;
 function ensureSchema(env) {
   if (!schemaReady) {
-    schemaReady = env.DB.prepare(
-      "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
-    ).run().catch(() => {});
+    schemaReady = Promise.all([
+      env.DB.prepare(
+        "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+      ).run().catch(() => {}),
+      env.DB.prepare(
+        "ALTER TABLE tasks ADD COLUMN jitter_minutes INTEGER NOT NULL DEFAULT 0"
+      ).run().catch(() => {}),
+      env.DB.prepare(
+        "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+      ).run().catch(() => {}),
+    ]);
   }
   return schemaReady;
 }
@@ -68,11 +77,12 @@ function validate(data) {
   }
   const timeout_seconds = Math.min(120, Math.max(1, parseInt(data.timeout_seconds, 10) || 30));
   const retries = Math.min(5, Math.max(0, parseInt(data.retries, 10) || 0));
+  const jitter_minutes = Math.min(1440, Math.max(0, parseInt(data.jitter_minutes, 10) || 0));
   return {
     name, url, method,
     headers: String(data.headers || ""),
     body: String(data.body || ""),
-    schedule_type: st, interval_minutes, cron_expr, timeout_seconds, retries,
+    schedule_type: st, interval_minutes, cron_expr, jitter_minutes, timeout_seconds, retries,
   };
 }
 
@@ -93,6 +103,46 @@ function parseHeaders(text) {
     if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
   }
   return out;
+}
+
+// ------------------------------------------------------------------ Gist 同步
+// 上传 / 下载的都只是任务配置（与导出备份同一结构），执行历史永远不参与同步。
+// Gist Token / Gist ID 存在 D1 的 settings 表（key=gist 的 JSON）。
+
+const GIST_API = "https://api.github.com/gists";
+const GIST_FILE = "web-cron.json";
+
+async function getSetting(env, key) {
+  const r = await env.DB.prepare("SELECT value FROM settings WHERE key=?").bind(key).first();
+  return r ? String(r.value || "") : "";
+}
+
+async function setSetting(env, key, value) {
+  await env.DB.prepare(
+    "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+  ).bind(key, value).run();
+}
+
+async function gistConfig(env) {
+  let g = {};
+  try { g = JSON.parse(await getSetting(env, "gist")) || {}; } catch (_) {}
+  return { token: String(g.token || ""), gist_id: String(g.gist_id || "") };
+}
+
+function gistHeaders(token) {
+  return {
+    "authorization": "Bearer " + token,
+    "accept": "application/vnd.github+json",
+    "user-agent": "web-cron",
+    "content-type": "application/json",
+  };
+}
+
+async function gistError(r) {
+  if (r.status === 401) return "GitHub Token 无效或缺少 gist 权限";
+  if (r.status === 403) return "GitHub API 拒绝访问（可能限流，或 Token 无 gist 权限）";
+  if (r.status === 404) return "Gist 不存在，请检查 Gist ID";
+  return "GitHub API HTTP " + r.status;
 }
 
 // ---------------------------------------------------------------------- HTTP 执行
@@ -176,7 +226,8 @@ async function runDue(env, now) {
   const due = r.results || [];
   // 先占坑：执行 HTTP 之前先推进 next_run_at，避免任务耗时接近 1 分钟时被
   // 下一个 Cron Trigger 重复捞起（与完整版 scheduler.ts 的策略一致）。
-  // 执行结束后 executeTask 用同一个 now 再算一次，值相同，幂等。
+  // 开了随机加时的任务两次计算各自重新随机（先占坑值随后被 executeTask 覆盖），
+  // 但都落在「固定下次时间 + [0,N) 分钟」内且必然大于 now，防重复语义不变。
   if (due.length) {
     await env.DB.batch(due.map((t) => env.DB.prepare(
       "UPDATE tasks SET next_run_at=? WHERE id=? AND next_run_at<=?"
@@ -238,9 +289,9 @@ async function handleApi(req, env, url) {
     const mr = await env.DB.prepare("SELECT COALESCE(MAX(sort_order),0) m FROM tasks").first();
     const ins = await env.DB.prepare(
       "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
-      "timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)"
+      "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)"
     ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
-           f.interval_minutes, f.cron_expr, f.timeout_seconds, f.retries,
+           f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
            Number(mr?.m || 0) + 1, now, now, next).run();
     return json({ ok: true, id: ins?.meta?.last_row_id ?? null, next_run_at: next });
   }
@@ -277,9 +328,9 @@ async function handleApi(req, env, url) {
       const next = computeNextRun(f, now, tz(env));
       await env.DB.prepare(
         "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,interval_minutes=?," +
-        "cron_expr=?,timeout_seconds=?,retries=?,updated_at=?,next_run_at=? WHERE id=?"
+        "cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,updated_at=?,next_run_at=? WHERE id=?"
       ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
-             f.interval_minutes, f.cron_expr, f.timeout_seconds, f.retries,
+             f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
              now, next, id).run();
       return json({ ok: true, next_run_at: next });
     }
@@ -341,12 +392,101 @@ async function handleApi(req, env, url) {
       so += 1;
       await env.DB.prepare(
         "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
-        "timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
       ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
-             f.interval_minutes, f.cron_expr, f.timeout_seconds, f.retries,
+             f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
              enabled, so, now, now, next).run();
       imported++;
     }
+    return json({ ok: true, imported, skipped });
+  }
+
+  // ---------------------------------------------------------------- Gist 同步
+
+  if (p === "/api/gist" && method === "GET") {
+    return json(await gistConfig(env));
+  }
+
+  if (p === "/api/gist" && method === "PUT") {
+    const d = await body();
+    await setSetting(env, "gist", JSON.stringify({
+      token: String(d.token || "").trim(),
+      gist_id: String(d.gist_id || "").trim(),
+    }));
+    return json({ ok: true });
+  }
+
+  // 上传：无 gist_id 时自动创建私密 Gist 并把 id 回写到本地配置
+  if (p === "/api/gist/push" && method === "POST") {
+    const g = await gistConfig(env);
+    if (!g.token) return fail("请先填写 GitHub Token（classic PAT，勾选 gist 权限）");
+    const xr = await env.DB.prepare("SELECT * FROM tasks ORDER BY id").all();
+    const content = JSON.stringify({
+      app: "web-cron-worker", version: 1, exported_at: Date.now(),
+      tasks: xr.results || [],
+    }, null, 2);
+    let r;
+    try {
+      r = g.gist_id
+        ? await fetch(GIST_API + "/" + g.gist_id, {
+            method: "PATCH", headers: gistHeaders(g.token),
+            body: JSON.stringify({ files: { [GIST_FILE]: { content } } }),
+          })
+        : await fetch(GIST_API, {
+            method: "POST", headers: gistHeaders(g.token),
+            body: JSON.stringify({
+              description: "web-cron", public: false,
+              files: { [GIST_FILE]: { content } },
+            }),
+          });
+    } catch (e) {
+      return fail("无法访问 GitHub API：" + String((e && e.message) || e), 502);
+    }
+    if (!r.ok) return fail(await gistError(r), 502);
+    const j = await r.json().catch(() => ({}));
+    const gist_id = String(j.id || g.gist_id || "");
+    if (gist_id !== g.gist_id) {
+      await setSetting(env, "gist", JSON.stringify({ token: g.token, gist_id }));
+    }
+    return json({ ok: true, created: !g.gist_id, gist_id, html_url: j.html_url || "" });
+  }
+
+  // 下载：用 Gist 备份覆盖本地任务。本地执行历史保留，D1 自增 id 续号，不与旧日志混淆
+  if (p === "/api/gist/pull" && method === "POST") {
+    const g = await gistConfig(env);
+    if (!g.token) return fail("请先填写 GitHub Token（classic PAT，勾选 gist 权限）");
+    if (!g.gist_id) return fail("还没有 Gist ID，可先执行「上传到 Gist」自动创建");
+    let r;
+    try {
+      r = await fetch(GIST_API + "/" + g.gist_id, { headers: gistHeaders(g.token) });
+    } catch (e) {
+      return fail("无法访问 GitHub API：" + String((e && e.message) || e), 502);
+    }
+    if (!r.ok) return fail(await gistError(r), 502);
+    const j = await r.json().catch(() => ({}));
+    const content = j && j.files && j.files[GIST_FILE] && j.files[GIST_FILE].content;
+    if (typeof content !== "string" || !content) return fail("Gist 中没有找到 " + GIST_FILE);
+    let d;
+    try { d = JSON.parse(content); } catch (_) { return fail("Gist 备份内容不是合法 JSON"); }
+    const tasks = Array.isArray(d.tasks) ? d.tasks : [];
+    if (!tasks.length) return fail("Gist 备份中没有任务数据");
+    const now = Date.now();
+    let imported = 0, skipped = 0;
+    const stmts = [env.DB.prepare("DELETE FROM tasks")];
+    for (const t of tasks) {
+      let f;
+      try { f = validate(t); } catch (_) { skipped++; continue; }
+      const next = computeNextRun(f, now, tz(env));
+      const enabled = t.enabled === 0 ? 0 : 1;
+      imported++;
+      stmts.push(env.DB.prepare(
+        "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
+        "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+             f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
+             enabled, Number(t.sort_order) > 0 ? Number(t.sort_order) : imported, now, now, next));
+    }
+    if (imported) await env.DB.batch(stmts);
     return json({ ok: true, imported, skipped });
   }
 

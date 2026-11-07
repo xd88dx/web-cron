@@ -22,12 +22,14 @@
 
 - 任务管理：新增 / 编辑 / 删除 / 启动 / 暂停
 - 调度方式：固定间隔（每 N 分钟）或 5 段式 cron 表达式
+- 随机加时：每任务可设 0~N 分钟，每次触发前随机取值累加到固定触发时间（APScheduler 原生 `jitter`，间隔与 Cron 均生效）
 - 请求配置：GET/POST/PUT/DELETE/HEAD/PATCH、自定义请求头、请求体、超时、失败重试
 - 浏览器拟人化：每次请求从真实浏览器 UA 池随机选取，并附带完整浏览器请求头（Accept / Accept-Language / Accept-Encoding / Sec-Fetch-* / sec-ch-ua 等，版本号与 UA 保持一致），降低被目标站 WAF 识别为脚本的概率；自定义请求头可覆盖任意默认头
 - 立即执行：手动触发一次并返回结果
 - 执行日志：状态码、耗时、错误信息、响应片段（每任务保留最近 200 条）
 - 统计面板：任务数、运行中、24h 成功率、24h 执行次数
 - 数据备份：导出 / 导入 JSON
+- Gist 同步：把任务配置备份到 GitHub 私密 Gist / 从 Gist 恢复（Token 与 Gist ID 存 SQLite `settings` 表；只同步任务配置，不同步执行历史）
 - 访问保护：设置 `PANEL_PASSWORD` 后需要密码登录（公网托管务必设置）
 
 ## 本地运行
@@ -100,3 +102,7 @@ python app.py
 | GET | `/api/tasks/<id>/history` | 执行日志（最近 50 条） |
 | GET | `/api/export` | 导出备份 JSON |
 | POST | `/api/import` | 导入备份 JSON |
+| GET | `/api/gist` | 读取 Gist 同步配置 |
+| PUT | `/api/gist` | 保存 Gist 同步配置 |
+| POST | `/api/gist/push` | 上传任务配置到 Gist |
+| POST | `/api/gist/pull` | 从 Gist 恢复（覆盖任务，历史保留） |

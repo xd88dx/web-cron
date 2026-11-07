@@ -61,10 +61,12 @@ curl --noproxy '*' "http://127.0.0.1:8799/cdn-cgi/handler/scheduled?cron=*+*+*+*
 
 - 任务增删改、启动/暂停、立即执行
 - 固定间隔（每 N 分钟）/ 5 段式 cron 表达式（支持 `*`、`*/n`、`a-b`、`a-b/n`、逗号列表；按设置时区判定）
+- 随机加时：每任务可设 0~N 分钟，每次触发前随机取值累加到固定触发时间（间隔与 Cron 均生效）
 - GET/POST/PUT/DELETE/HEAD/PATCH、自定义请求头（可覆盖默认浏览器头）、请求体、超时、失败重试
 - 浏览器拟人化：随机真实 UA 池 + 完整浏览器头（`sec-ch-ua` 版本与 UA 一致、`Sec-Fetch-*`、`Accept-Language` 等）
 - 执行日志（状态码 / 耗时 / 错误 / 响应片段，每任务保留 200 条）、24h 成功率统计
 - JSON 导出 / 导入备份
+- Gist 同步：把任务配置备份到 GitHub 私密 Gist / 从 Gist 恢复（Token 与 Gist ID 存 D1 `settings` 表；只同步任务配置，不同步执行历史）
 
 ## 已知限制
 
@@ -76,7 +78,8 @@ curl --noproxy '*' "http://127.0.0.1:8799/cdn-cgi/handler/scheduled?cron=*+*+*+*
 
 与完整版路径一致：`GET/POST /api/tasks`、`PUT/DELETE /api/tasks/<id>`、
 `POST /api/tasks/<id>/toggle`、`POST /api/tasks/<id>/run`、
-`GET /api/tasks/<id>/history`、`GET /api/export`、`POST /api/import`、`POST /api/login`。
+`GET /api/tasks/<id>/history`、`GET /api/export`、`POST /api/import`、`POST /api/login`、
+`GET/PUT /api/gist`（Gist 同步配置）、`POST /api/gist/push`、`POST /api/gist/pull`。
 除 `/api/login` 外，设置密码后所有 `/api/*` 需带 `X-Auth: <密码>`。
 
 ## 文件

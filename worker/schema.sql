@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   schedule_type TEXT NOT NULL DEFAULT 'interval',
   interval_minutes INTEGER,
   cron_expr TEXT,
+  jitter_minutes INTEGER NOT NULL DEFAULT 0,
   timeout_seconds INTEGER NOT NULL DEFAULT 30,
   retries INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
@@ -38,6 +39,12 @@ CREATE TABLE IF NOT EXISTS history (
   duration_ms INTEGER,
   error TEXT,
   snippet TEXT
+);
+
+-- 应用级键值配置（当前存 Gist 同步的 token / gist_id，key=gist，值为 JSON 字符串）
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(enabled, next_run_at);

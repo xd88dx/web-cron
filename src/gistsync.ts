@@ -7,9 +7,12 @@
 //   两边都≠基线         → 冲突 → 跳过并告警（等人工处理）
 // 指纹只算任务配置字段，排除 id / 执行统计 / 时间戳等易变字段，任务跑一次不会被误判为修改。
 import { createHash } from "node:crypto";
+import { computeNextRun } from "./cron.js";
 import { read, mutate, makeTask, taskDefaults } from "./store.js";
 import { validateTask, type TaskFields } from "./validate.js";
 import type { Task, StoreData } from "./types.js";
+
+const TZ = process.env.APP_TIMEZONE || "Asia/Shanghai";
 
 export const GIST_API = "https://api.github.com/gists";
 export const GIST_FILE = "web-cron.json";
@@ -136,7 +139,9 @@ export async function pushCore(now: number, reason: string): Promise<SyncOutcome
   return { action: g.gist_id ? "pushed" : "created", gist_id, html_url: j.html_url || "" };
 }
 
-// 下载：用 Gist 备份覆盖本地任务。执行历史保留，新任务用全新 id（续号），不与旧日志混淆
+// 下载：智能合并。名称+URL 相同的老任务原位更新（沿用 id 与执行日志，统计/创建时间保留），
+// 其余按 Gist 新建（全新 id 续号）；被替换任务留下的孤儿日志一并清理。
+// 拉取后本地任务配置与 Gist 完全一致，基线指纹成立，不会引发无谓的反向推送。
 export async function pullCore(now: number, reason: string): Promise<SyncOutcome> {
   const g = gistConfig();
   if (!g.token) throw new Error("请先填写 GitHub Token（ghp_ xxx）");
@@ -159,19 +164,39 @@ export async function pullCore(now: number, reason: string): Promise<SyncOutcome
   if (!tasks.length) throw new Error("Gist 备份中没有任务数据");
   let imported = 0, skipped = 0;
   await mutate((store: StoreData) => {
-    store.tasks = [];
+    const used = new Set<number>();
+    const nextTasks: Task[] = [];
     for (const raw of tasks) {
       let f: TaskFields;
       try { f = validateTask(raw); } catch { skipped++; continue; }
-      store.seqTask += 1;
-      const t = makeTask(store.seqTask, f, now);
-      t.enabled = raw.enabled === 0 ? 0 : 1;
-      if (!t.enabled) t.next_run_at = null;
+      const enabled = raw.enabled === 0 ? 0 : 1;
       // 保留备份里的排序（0/缺失按 0，列表按 id 兜底）；不发明新值，保证拉取后指纹与 Gist 一致
-      t.sort_order = Number(raw.sort_order) > 0 ? Number(raw.sort_order) : 0;
-      store.tasks.push(t);
+      const so = Number(raw.sort_order) > 0 ? Number(raw.sort_order) : 0;
+      const hit = store.tasks.find(
+        (t) => !used.has(t.id) && t.name === f.name && t.url === f.url,
+      );
+      if (hit) {
+        // 原位更新：id / created_at / 执行统计 / 日志关联全部保留，配置以 Gist 为准
+        used.add(hit.id);
+        const merged: Task = {
+          ...hit, ...f, enabled, sort_order: so, updated_at: now,
+          next_run_at: enabled ? computeNextRun({ ...hit, ...f }, now, TZ) : null,
+        };
+        nextTasks.push(merged);
+      } else {
+        store.seqTask += 1;
+        const t = makeTask(store.seqTask, f, now);
+        t.enabled = enabled;
+        if (!enabled) t.next_run_at = null;
+        t.sort_order = so;
+        nextTasks.push(t);
+      }
       imported++;
     }
+    store.tasks = nextTasks;
+    // 清理孤儿日志：不被任何现存任务引用的历史（含历史拉取遗留的）一次性扫掉
+    const alive = new Set(nextTasks.map((t) => t.id));
+    store.history = store.history.filter((h) => alive.has(h.task_id));
   });
   await setGist({
     baseline_hash: hashLikeLocal(tasks),

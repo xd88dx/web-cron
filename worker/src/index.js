@@ -238,6 +238,8 @@ async function gistPushCore(env, now, reason) {
   return { action: g.gist_id ? "pushed" : "created", gist_id, html_url: j.html_url || "" };
 }
 
+// 下载：智能合并。名称+URL 相同的老任务原位更新（沿用 id 与执行日志），
+// 其余按 Gist 新建；被替换任务留下的孤儿日志一并清理。
 async function gistPullCore(env, now, reason) {
   const g = await gistConfig(env);
   if (!g.token) throw new Error("请先填写 GitHub Token（ghp_ xxx）");
@@ -258,22 +260,48 @@ async function gistPullCore(env, now, reason) {
   try { d = JSON.parse(content); } catch (_) { throw new Error("Gist 备份内容不是合法 JSON"); }
   const tasks = Array.isArray(d.tasks) ? d.tasks : [];
   if (!tasks.length) throw new Error("Gist 备份中没有任务数据");
+  const olds = await env.DB.prepare("SELECT id,name,url FROM tasks").all();
+  const used = new Set();
+  const keptIds = [];
   let imported = 0, skipped = 0;
-  const stmts = [env.DB.prepare("DELETE FROM tasks")];
+  const stmts = [];
   for (const t of tasks) {
     let f;
     try { f = validate(t); } catch (_) { skipped++; continue; }
     const next = computeNextRun(f, now, tz(env));
     const enabled = t.enabled === 0 ? 0 : 1;
+    // 保留备份里的排序（0/缺失按 0）；不发明新值，保证拉取后指纹与 Gist 一致
+    const so = Number(t.sort_order) > 0 ? Number(t.sort_order) : 0;
     imported++;
-    stmts.push(env.DB.prepare(
-      "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
-      "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-    ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
-           f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
-           enabled, Number(t.sort_order) > 0 ? Number(t.sort_order) : 0, now, now, next));
+    const hit = (olds.results || []).find(
+      (o) => !used.has(o.id) && o.name === f.name && o.url === f.url
+    );
+    if (hit) {
+      // 原位更新：id 与日志关联保留，配置以 Gist 为准
+      used.add(hit.id);
+      keptIds.push(hit.id);
+      stmts.push(env.DB.prepare(
+        "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,interval_minutes=?," +
+        "cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,enabled=?,sort_order=?,updated_at=?,next_run_at=? WHERE id=?"
+      ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+             f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
+             enabled, so, now, next, hit.id));
+    } else {
+      stmts.push(env.DB.prepare(
+        "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
+        "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+             f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
+             enabled, so, now, now, next));
+    }
   }
-  if (imported) await env.DB.batch(stmts);
+  // 未被匹配的老任务随本次拉取移除
+  for (const o of olds.results || []) {
+    if (!used.has(o.id)) stmts.push(env.DB.prepare("DELETE FROM tasks WHERE id=?").bind(o.id));
+  }
+  // 清理孤儿日志：不被任何现存任务引用的历史（含历史拉取遗留的）一次性扫掉
+  stmts.push(env.DB.prepare("DELETE FROM history WHERE task_id NOT IN (SELECT id FROM tasks)"));
+  await env.DB.batch(stmts);
   await saveGistConfig(env, { ...g, baseline_hash: await hashLikeLocal(tasks), synced_at: now, last_result: reason });
   return { action: "pulled", imported, skipped, gist_id: g.gist_id };
 }

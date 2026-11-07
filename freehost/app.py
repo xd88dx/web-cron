@@ -805,29 +805,49 @@ def gist_pull_core(now, reason):
     if not prepared:
         raise GistError("Gist 备份中没有可导入的任务")
 
-    # 单事务覆盖：DELETE + 全部 INSERT 一次提交，中途失败自动回滚，原任务原样保留。
-    # 执行历史保留不动；新任务 id 由 AUTOINCREMENT 续号，不会与旧日志混淆。
+    # 智能合并（单事务）：名称+URL 相同的老任务原位更新（沿用 id 与执行日志，统计/创建
+    # 时间保留，配置以 Gist 为准），其余按 Gist 新建；未被匹配的老任务移除，其孤儿日志
+    # （含历史拉取遗留的）一并清理。中途失败自动回滚，原任务原样保留。
     with closing(db()) as conn:
-        old_ids = [r["id"] for r in conn.execute("SELECT id FROM tasks")]
+        old_rows = [dict(r) for r in conn.execute("SELECT id,name,url FROM tasks")]
+        used = set()
         try:
-            conn.execute("DELETE FROM tasks")
             for fields, enabled, so in prepared:
                 now_row = now_str()
-                conn.execute(
-                    "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
-                    "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (fields["name"], fields["url"], fields["method"], fields["headers"],
-                     fields["body"], fields["schedule_type"], fields["interval_minutes"],
-                     fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
-                     fields["retries"], enabled, so, now_row, now_row),
-                )
+                hit = next((o for o in old_rows if o["id"] not in used
+                            and o["name"] == fields["name"] and o["url"] == fields["url"]), None)
+                if hit:
+                    used.add(hit["id"])
+                    conn.execute(
+                        "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,"
+                        "interval_minutes=?,cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,"
+                        "enabled=?,sort_order=?,updated_at=? WHERE id=?",
+                        (fields["name"], fields["url"], fields["method"], fields["headers"],
+                         fields["body"], fields["schedule_type"], fields["interval_minutes"],
+                         fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
+                         fields["retries"], enabled, so, now_row, hit["id"]),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
+                        "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
+                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (fields["name"], fields["url"], fields["method"], fields["headers"],
+                         fields["body"], fields["schedule_type"], fields["interval_minutes"],
+                         fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
+                         fields["retries"], enabled, so, now_row, now_row),
+                    )
+            for o in old_rows:
+                if o["id"] not in used:
+                    conn.execute("DELETE FROM tasks WHERE id=?", (o["id"],))
+            # 清理孤儿日志：不被任何现存任务引用的历史（含历史拉取遗留的）一次性扫掉
+            conn.execute("DELETE FROM history WHERE task_id NOT IN (SELECT id FROM tasks)")
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-    for tid in old_ids:
-        unschedule_task(tid)
+    for o in old_rows:
+        unschedule_task(o["id"])
     with closing(db()) as conn:
         rows = [dict(r) for r in conn.execute("SELECT * FROM tasks WHERE enabled=1")]
     for row in rows:

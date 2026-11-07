@@ -4,20 +4,31 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
+import { computeNextRun } from "./cron.js";
 import type { StoreData, Task, HistoryEntry, StoreStats, GistConfig } from "./types.js";
+import type { TaskFields } from "./validate.js";
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
 const FILE = path.join(DATA_DIR, "store.json");
+const TZ = process.env.APP_TIMEZONE || "Asia/Shanghai";
 export const HISTORY_KEEP = 200;
 
 function empty(): StoreData {
-  return { version: 1, seqTask: 0, seqHistory: 0, tasks: [], history: [], gist: { token: "", gist_id: "" } };
+  return { version: 1, seqTask: 0, seqHistory: 0, tasks: [], history: [], gist: normalizeGist(null) };
 }
 
 // Gist 同步配置：旧数据没有该字段时补默认值
-function normalizeGist(raw: any): GistConfig {
+export function normalizeGist(raw: any): GistConfig {
   const g = raw && typeof raw === "object" ? raw : {};
-  return { token: String(g.token || ""), gist_id: String(g.gist_id || "") };
+  return {
+    token: String(g.token || ""),
+    gist_id: String(g.gist_id || ""),
+    auto: g.auto ? 1 : 0,
+    interval_min: Math.min(1440, Math.max(1, parseInt(g.interval_min, 10) || 5)),
+    baseline_hash: String(g.baseline_hash || ""),
+    synced_at: Number(g.synced_at) || null,
+    last_result: String(g.last_result || ""),
+  };
 }
 
 // 读取旧数据时补齐新增字段，保证升级不丢任务
@@ -42,6 +53,15 @@ export function taskDefaults(): Omit<Task, "id" | "name" | "url"> {
 
 function normalizeTask(t: any): Task {
   return { ...taskDefaults(), ...t } as Task;
+}
+
+// 新建任务：默认值在前，f 覆盖；next_run_at 按调度类型（含随机加时）计算
+export function makeTask(id: number, f: TaskFields, now: number): Task {
+  return {
+    id, ...taskDefaults(), ...f,
+    created_at: now, updated_at: now,
+    next_run_at: computeNextRun(f, now, TZ),
+  };
 }
 
 function normalizeHistory(h: any): HistoryEntry {

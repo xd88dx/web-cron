@@ -8,10 +8,13 @@ import { computeNextRun, fmtTs } from "./cron.js";
 import { validateTask, type TaskFields } from "./validate.js";
 import { browserState, detectBrowser, shutdownBrowser } from "./browser.js";
 import {
-  initStore, read, mutate, stats, getTask, historyFor, taskDefaults,
+  initStore, read, mutate, stats, getTask, historyFor, makeTask,
   screenshotsDir,
 } from "./store.js";
 import { executeTask, startScheduler, stopScheduler, isRunning } from "./scheduler.js";
+import {
+  pushCore, pullCore, scheduleMutationSync, startAutoSync, stopAutoSync,
+} from "./gistsync.js";
 import { HTML } from "./ui.js";
 import type { Task, StoreData } from "./types.js";
 
@@ -22,16 +25,7 @@ const PASSWORD = process.env.PANEL_PASSWORD || "";
 
 const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 });
 
-function makeTask(id: number, f: TaskFields, now: number): Task {
-  // 默认值必须在前：否则 taskDefaults() 会把 f 里的 mode / cron_expr / 浏览器字段全部覆盖掉
-  return {
-    id, ...taskDefaults(), ...f,
-    created_at: now, updated_at: now,
-    next_run_at: computeNextRun(f, now, TZ),
-  };
-}
-
-// 备份结构：导出与 Gist 上传共用；只含任务配置，不含执行历史
+// 备份结构：/api/export 下载用（Gist 上传走 gistsync.pushCore，同一结构）
 function exportPayload() {
   return { app: "web-cron-node", version: 1, exported_at: Date.now(), tasks: read().tasks };
 }
@@ -107,6 +101,7 @@ app.post("/api/tasks", async (req, reply) => {
     d.tasks.push(task);
     return task;
   });
+  scheduleMutationSync();
   return json(reply, { ok: true, id: t.id, next_run_at: t.next_run_at });
 });
 
@@ -131,6 +126,7 @@ app.post("/api/tasks/reorder", async (req, reply) => {
     return true;
   });
   if (r === null) return fail(reply, "ids 必须恰好包含全部任务 id");
+  scheduleMutationSync();
   return json(reply, { ok: true });
 });
 
@@ -147,6 +143,7 @@ app.put("/api/tasks/:id", async (req, reply) => {
     return { next_run_at: t.next_run_at };
   });
   if (!r) return fail(reply, "任务不存在", 404);
+  scheduleMutationSync();
   return json(reply, { ok: true, next_run_at: r.next_run_at });
 });
 
@@ -160,6 +157,7 @@ app.delete("/api/tasks/:id", async (req, reply) => {
     return true;
   });
   if (!ok) return fail(reply, "任务不存在", 404);
+  scheduleMutationSync();
   return json(reply, { ok: true });
 });
 
@@ -173,6 +171,7 @@ app.post("/api/tasks/:id/toggle", async (req, reply) => {
     return { enabled: t.enabled, next_run_at: t.next_run_at };
   });
   if (!r) return fail(reply, "任务不存在", 404);
+  scheduleMutationSync();
   return json(reply, { ok: true, ...r });
 });
 
@@ -196,101 +195,48 @@ app.get("/api/export", async (_req, reply) => {
 });
 
 // --------------------------------------------------------------------------- Gist 同步
+// 手动端点 + 配置存取；自动同步的决策逻辑在 gistsync.ts（三方对比：本地 / Gist / 基线）。
 // 上传 / 下载的都只是任务配置（与导出备份同一结构），执行历史永远不参与同步。
 
-const GIST_API = "https://api.github.com/gists";
-const GIST_FILE = "web-cron.json";
-
-function gistHeaders(token: string): Record<string, string> {
-  return {
-    "authorization": `Bearer ${token}`,
-    "accept": "application/vnd.github+json",
-    "user-agent": "web-cron",
-    "content-type": "application/json",
-  };
-}
-
-async function gistError(r: Response): Promise<string> {
-  if (r.status === 401) return "GitHub Token 无效或缺少 gist 权限";
-  if (r.status === 403) return "GitHub API 拒绝访问（可能限流，或 Token 无 gist 权限）";
-  if (r.status === 404) return "Gist 不存在，请检查 Gist ID";
-  return "GitHub API HTTP " + r.status;
-}
-
 app.get("/api/gist", async (_req, reply) => {
-  return json(reply, read().gist);
+  const g = read().gist;
+  return json(reply, {
+    token: g.token, gist_id: g.gist_id,
+    auto: g.auto, interval_min: g.interval_min,
+    synced_at: g.synced_at, last_result: g.last_result,
+  });
 });
 
 app.put("/api/gist", async (req, reply) => {
   const d = (req.body || {}) as any;
-  const token = String(d.token || "").trim();
-  const gist_id = String(d.gist_id || "").trim();
-  await mutate((st) => { st.gist = { token, gist_id }; });
+  const g = read().gist;
+  await mutate((st) => {
+    st.gist.token = String(d.token ?? g.token).trim();
+    st.gist.gist_id = String(d.gist_id ?? g.gist_id).trim();
+    if (d.auto !== undefined) st.gist.auto = d.auto ? 1 : 0;
+    if (d.interval_min !== undefined) {
+      st.gist.interval_min = Math.min(1440, Math.max(1, parseInt(d.interval_min, 10) || 5));
+    }
+  });
   return json(reply, { ok: true });
 });
 
-// 上传：无 gist_id 时自动创建私密 Gist 并把 id 回写到本地配置
 app.post("/api/gist/push", async (_req, reply) => {
-  const g = read().gist;
-  if (!g.token) return fail(reply, "请先填写 GitHub Token（classic PAT，勾选 gist 权限）");
-  const content = JSON.stringify(exportPayload(), null, 2);
   try {
-    const r = g.gist_id
-      ? await fetch(`${GIST_API}/${g.gist_id}`, {
-          method: "PATCH", headers: gistHeaders(g.token),
-          body: JSON.stringify({ files: { [GIST_FILE]: { content } } }),
-        })
-      : await fetch(GIST_API, {
-          method: "POST", headers: gistHeaders(g.token),
-          body: JSON.stringify({
-            description: "web-cron", public: false,
-            files: { [GIST_FILE]: { content } },
-          }),
-        });
-    if (!r.ok) return fail(reply, await gistError(r), 502);
-    const j = await r.json() as any;
-    const gist_id = String(j.id || g.gist_id || "");
-    if (gist_id !== g.gist_id) await mutate((st) => { st.gist = { ...st.gist, gist_id }; });
-    return json(reply, { ok: true, created: !g.gist_id, gist_id, html_url: j.html_url || "" });
+    const r = await pushCore(Date.now(), "手动上传");
+    return json(reply, { ok: true, created: r.action === "created", gist_id: r.gist_id, html_url: r.html_url || "" });
   } catch (e: any) {
-    return fail(reply, "无法访问 GitHub API：" + String(e?.message || e), 502);
+    return fail(reply, String(e?.message || e), 502);
   }
 });
 
-// 下载：用 Gist 备份覆盖本地任务。本地执行历史保留，新任务用全新 id（seqTask 续号），不与旧日志混淆
+// 下载：用 Gist 备份覆盖本地任务。本地执行历史保留，新任务用全新 id（续号），不与旧日志混淆
 app.post("/api/gist/pull", async (_req, reply) => {
-  const g = read().gist;
-  if (!g.token) return fail(reply, "请先填写 GitHub Token（classic PAT，勾选 gist 权限）");
-  if (!g.gist_id) return fail(reply, "还没有 Gist ID，可先执行「上传到 Gist」自动创建");
   try {
-    const r = await fetch(`${GIST_API}/${g.gist_id}`, { headers: gistHeaders(g.token) });
-    if (!r.ok) return fail(reply, await gistError(r), 502);
-    const j = await r.json() as any;
-    const content = j?.files?.[GIST_FILE]?.content;
-    if (typeof content !== "string" || !content) return fail(reply, `Gist 中没有找到 ${GIST_FILE}`);
-    let d: any;
-    try { d = JSON.parse(content); } catch { return fail(reply, "Gist 备份内容不是合法 JSON"); }
-    const tasks = Array.isArray(d?.tasks) ? d.tasks : [];
-    if (!tasks.length) return fail(reply, "Gist 备份中没有任务数据");
-    const now = Date.now();
-    let imported = 0, skipped = 0;
-    await mutate((store) => {
-      store.tasks = [];
-      for (const raw of tasks) {
-        let f: TaskFields;
-        try { f = validateTask(raw); } catch { skipped++; continue; }
-        store.seqTask += 1;
-        const t = makeTask(store.seqTask, f, now);
-        t.enabled = raw.enabled === 0 ? 0 : 1;
-        if (!t.enabled) t.next_run_at = null;
-        t.sort_order = Number(raw.sort_order) > 0 ? Number(raw.sort_order) : imported + 1;
-        store.tasks.push(t);
-        imported++;
-      }
-    });
-    return json(reply, { ok: true, imported, skipped });
+    const r = await pullCore(Date.now(), "手动下载恢复");
+    return json(reply, { ok: true, imported: r.imported ?? 0, skipped: r.skipped ?? 0 });
   } catch (e: any) {
-    return fail(reply, "下载失败：" + String(e?.message || e), 502);
+    return fail(reply, String(e?.message || e), 502);
   }
 });
 
@@ -314,6 +260,7 @@ app.post("/api/import", async (req, reply) => {
       imported++;
     }
   });
+  scheduleMutationSync();
   return json(reply, { ok: true, imported, skipped });
 });
 
@@ -337,12 +284,14 @@ async function main() {
   console.log(`[http] web-cron 已启动 http://${HOST}:${PORT} · 时区 ${TZ}`);
   if (!PASSWORD) console.warn("[http] ⚠️ 未设置 PANEL_PASSWORD，管理面板对公网裸露，请务必设置");
   startScheduler();
+  startAutoSync();
   // 浏览器探测放到后台，不阻塞 Web 服务；失败即自动降级为纯 HTTP
   detectBrowser().catch((e) => console.error("[browser] 探测异常: " + String(e)));
 }
 
 async function shutdown() {
   stopScheduler();
+  stopAutoSync();
   await shutdownBrowser().catch(() => undefined);
   await app.close().catch(() => undefined);
   process.exit(0);

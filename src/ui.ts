@@ -184,6 +184,11 @@ td .muted{margin-top:3px}
     <div class="muted" style="margin-bottom:12px">把任务配置备份到 GitHub 私密 Gist，在多个部署之间同步。</div>
     <div class="frow"><label>GitHub Token（ghp_ xxx）</label><input id="gToken" placeholder="ghp_xxxxxxxx"></div>
     <div class="frow"><label>Gist ID（留空即可，首次上传自动创建并回填）</label><input id="gGistId" placeholder="留空则上传时自动创建新 Gist"></div>
+    <div class="grid2">
+      <div class="frow"><label class="checkline"><input type="checkbox" id="gAuto"> 自动同步（改动自动推送，对方更新自动拉取）</label></div>
+      <div class="frow"><label>检查间隔（分钟，1-1440）</label><input id="gInterval" type="number" value="5" min="1" max="1440"></div>
+    </div>
+    <div class="muted" id="gStatus" style="margin:-6px 0 8px"></div>
     <div class="err" id="gistErr"></div>
     <div class="mfoot"><button onclick="document.getElementById('gistOverlay').classList.remove('show')">取消</button><button id="btnGistSave">保存配置</button><button id="btnGistPull">⬇ 从 Gist 下载</button><button id="btnGistPush" class="primary">⬆ 上传到 Gist</button></div>
   </div>
@@ -499,10 +504,14 @@ function openGist(){
   $('gistOverlay').classList.add('show');
   api('/api/gist').then(function(g){
     $('gToken').value=g.token||''; $('gGistId').value=g.gist_id||'';
+    $('gAuto').checked=!!g.auto; $('gInterval').value=g.interval_min==null?5:g.interval_min;
+    $('gStatus').textContent=g.last_result?('上次同步：'+(g.synced_at?fmt(g.synced_at):'')+' · '+g.last_result):'';
   }).catch(function(e){ $('gistErr').textContent=e.message; });
 }
 async function gistSaveCfg(){
-  await api('/api/gist',{method:'PUT',body:JSON.stringify({token:$('gToken').value,gist_id:$('gGistId').value})});
+  await api('/api/gist',{method:'PUT',body:JSON.stringify({
+    token:$('gToken').value,gist_id:$('gGistId').value,
+    auto:$('gAuto').checked?1:0,interval_min:+$('gInterval').value||5})});
 }
 async function gistPush(){
   try{

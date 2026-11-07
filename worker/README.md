@@ -67,6 +67,7 @@ curl --noproxy '*' "http://127.0.0.1:8799/cdn-cgi/handler/scheduled?cron=*+*+*+*
 - 执行日志（状态码 / 耗时 / 错误 / 响应片段，每任务保留 200 条）、24h 成功率统计
 - JSON 导出 / 导入备份
 - Gist 同步：把任务配置备份到 GitHub 私密 Gist / 从 Gist 恢复（Token 与 Gist ID 存 D1 `settings` 表；只同步任务配置，不同步执行历史）
+- Gist 自动同步：可选开启，任务变化后立即检查 + Cron Trigger 兜底；三方对比（本地 / Gist / 基线）决定自动推送、自动拉取或冲突跳过告警，多机轮换时不会把过时配置推上去覆盖新修改
 
 ## 已知限制
 

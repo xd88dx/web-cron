@@ -7,6 +7,7 @@ import {
   describeBrowserUa, browserIdentity, uaDataInitScript,
 } from "../dist/headers.js";
 import { looksLikeChallenge, shouldFallback } from "../dist/http.js";
+import { configHash, hashLikeLocal } from "../dist/gistsync.js";
 
 let pass = 0;
 function t(name, fn) {
@@ -200,6 +201,46 @@ t("shouldFallback 只对反爬信号触发", () => {
   assert.equal(shouldFallback({ ...base, status_code: null }), true);
   assert.equal(shouldFallback({ ...base, status_code: 404 }), false);
   assert.equal(shouldFallback({ ...base, status_code: 200, challenge: true }), true);
+});
+
+console.log("== Gist 同步配置指纹 ==");
+function cfg(over) {
+  return Object.assign({
+    name: "保活", url: "https://example.com/", method: "GET", headers: "", body: "",
+    schedule_type: "interval", interval_minutes: 5, cron_expr: null, jitter_minutes: 3,
+    timeout_seconds: 30, retries: 0, enabled: 1, sort_order: 1,
+    mode: "http", browser_wait_until: "domcontentloaded", browser_wait_selector: "",
+    browser_assert: "", browser_dwell_ms: 0, browser_proxy: "", browser_ua: "",
+    browser_screenshot: 0, http_fallback_browser: 0,
+  }, over);
+}
+t("指纹：id 与易变字段（执行统计/时间戳/next_run_at）不参与", () => {
+  const a = configHash([cfg({ id: 1, last_run_at: 111, success_count: 9, next_run_at: 222, created_at: 1, updated_at: 2 })]);
+  const b = configHash([cfg({ id: 77, last_run_at: 999, success_count: 0, next_run_at: null, created_at: 8, updated_at: 9 })]);
+  assert.equal(a, b);
+});
+t("指纹：配置变化（名称/随机加时/启停/排序）会改变", () => {
+  const base = configHash([cfg({ id: 1 })]);
+  assert.notEqual(base, configHash([cfg({ id: 1, name: "改名" })]));
+  assert.notEqual(base, configHash([cfg({ id: 1, jitter_minutes: 4 })]));
+  assert.notEqual(base, configHash([cfg({ id: 1, enabled: 0 })]));
+  assert.notEqual(base, configHash([cfg({ id: 1, sort_order: 2 })]));
+});
+t("指纹：多任务按 (sort_order,id) 排序，与传入顺序无关", () => {
+  const x = cfg({ id: 1, name: "X", sort_order: 1 });
+  const y = cfg({ id: 2, name: "Y", sort_order: 2 });
+  assert.equal(configHash([x, y]), configHash([y, x]));
+});
+t("指纹：Gist 原始数据经规范化后与本地一致（validate + 默认值补齐）", () => {
+  // 拉取后本地存储经 validateTask 规范化：interval 任务 cron_expr 为 null 等
+  const localTask = cfg({ id: 4 });
+  // Gist 上的原始 JSON：可能带多余易变字段与不同 id
+  const rawRemote = { ...cfg({ id: 1, cron_expr: null }), created_at: 1, next_run_at: 99 };
+  assert.equal(hashLikeLocal([rawRemote]), configHash([localTask]));
+});
+t("指纹：非法任务在规范化时被剔除（与拉取跳过逻辑一致）", () => {
+  const good = cfg({ id: 1 });
+  assert.equal(hashLikeLocal([good, { name: "" }]), configHash([good]));
 });
 
 console.log("\n通过 " + pass + " 项" + (process.exitCode ? "（有失败）" : "，全部通过"));

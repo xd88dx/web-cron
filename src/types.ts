@@ -88,6 +88,12 @@ export interface ExecResult {
 export interface GistConfig {
   token: string;
   gist_id: string;
+  // 自动同步：三方对比（本地 / Gist / 基线）决定推、拉还是跳过
+  auto: number;            // 1 = 启用
+  interval_min: number;    // 检查间隔（分钟，兜底轮询）
+  baseline_hash: string;   // 上次与 Gist 一致时的配置指纹（"" = 从未同步）
+  synced_at: number | null; // 上次同步动作发生时间（含手动）
+  last_result: string;     // 人读的同步结果（推送/拉取/冲突跳过/错误）
 }
 
 export interface StoreData {

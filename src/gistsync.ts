@@ -14,6 +14,10 @@ import type { Task, StoreData } from "./types.js";
 export const GIST_API = "https://api.github.com/gists";
 export const GIST_FILE = "web-cron.json";
 
+// GitHub 请求超时：GFW 对 api.github.com 的连接黑洞会让无超时的 fetch 长时间挂起，
+// 卡住自动同步的单飞行标志，导致后续检查全部静默跳过
+const GITHUB_TIMEOUT_MS = 15000;
+
 // ------------------------------------------------------------------ 配置指纹
 
 // 参与指纹的配置字段（顺序固定，三版语义一致；各版本可按自身字段增删，只需自洽）
@@ -107,10 +111,12 @@ export async function pushCore(now: number, reason: string): Promise<SyncOutcome
     r = g.gist_id
       ? await fetch(`${GIST_API}/${g.gist_id}`, {
           method: "PATCH", headers: gistHeaders(g.token),
+          signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
           body: JSON.stringify({ files: { [GIST_FILE]: { content } } }),
         })
       : await fetch(GIST_API, {
           method: "POST", headers: gistHeaders(g.token),
+          signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
           body: JSON.stringify({
             description: "web-cron", public: false,
             files: { [GIST_FILE]: { content } },
@@ -137,7 +143,9 @@ export async function pullCore(now: number, reason: string): Promise<SyncOutcome
   if (!g.gist_id) throw new Error("还没有 Gist ID，可先执行「上传到 Gist」自动创建");
   let r: Response;
   try {
-    r = await fetch(`${GIST_API}/${g.gist_id}`, { headers: gistHeaders(g.token) });
+    r = await fetch(`${GIST_API}/${g.gist_id}`, {
+      headers: gistHeaders(g.token), signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
   } catch (e: any) {
     throw new Error("无法访问 GitHub API：" + String(e?.message || e));
   }
@@ -191,13 +199,15 @@ async function autoSyncOnce(trigger: "mutation" | "timer"): Promise<string | nul
   if (!g.gist_id) {
     // 从未推过：本地有任务就直接推（建立基线），空则无事可做
     if (!read().tasks.length) return null;
-    await pushCore(now, "已推送（首次建立基线）");
+    await pushCore(now, "已推送");
     return "pushed";
   }
   // 拉取 Gist 现状
   let resp: Response;
   try {
-    resp = await fetch(`${GIST_API}/${g.gist_id}`, { headers: gistHeaders(g.token) });
+    resp = await fetch(`${GIST_API}/${g.gist_id}`, {
+      headers: gistHeaders(g.token), signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+    });
   } catch (e: any) {
     await recordResult("自动同步失败：无法访问 GitHub API：" + String(e?.message || e));
     return null;
@@ -224,15 +234,15 @@ async function autoSyncOnce(trigger: "mutation" | "timer"): Promise<string | nul
   if (!base) {
     // 本机从未与该 Gist 同步过：以 Gist 为准（新机器加入轮换直接拿最新配置）
     if (remoteHash === localHash) {
-      await setGist({ baseline_hash: remoteHash, synced_at: now, last_result: "已建立基线（本地与 Gist 一致）" });
+      await setGist({ baseline_hash: remoteHash, synced_at: now, last_result: "已建立基线" });
       return "baseline";
     }
     if (!remoteHash) {
       if (!localHash) return null;
-      await pushCore(now, "已推送（首次建立基线）");
+      await pushCore(now, "已推送");
       return "pushed";
     }
-    await pullCore(now, "已拉取（首次以 Gist 为准）");
+    await pullCore(now, "已拉取");
     return "pulled";
   }
 
@@ -240,16 +250,16 @@ async function autoSyncOnce(trigger: "mutation" | "timer"): Promise<string | nul
   const remoteChanged = remoteHash !== base;
   if (!localChanged && !remoteChanged) return "same";
   if (localChanged && !remoteChanged) {
-    await pushCore(now, "已自动推送（本地有修改）");
+    await pushCore(now, "已推送");
     return "pushed";
   }
   if (remoteChanged && !localChanged) {
     if (!remoteHash) {
       // Gist 上文件被删：本地是最后一致状态，重新推上去
-      await pushCore(now, "已推送（Gist 文件丢失，本地恢复）");
+      await pushCore(now, "已推送");
       return "pushed";
     }
-    await pullCore(now, "已自动拉取（Gist 有更新）");
+    await pullCore(now, "已拉取");
     return "pulled";
   }
   // 两边都改过：跳过并告警，等人工选择上传或下载

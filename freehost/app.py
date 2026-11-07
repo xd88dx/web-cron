@@ -865,7 +865,7 @@ def _auto_sync_once(trigger):
         with closing(db()) as conn:
             n = conn.execute("SELECT COUNT(*) c FROM tasks").fetchone()["c"]
         if n:
-            gist_push_core(now_s, "已推送（首次建立基线）")
+            gist_push_core(now_s, "已推送")
         return
 
     try:
@@ -896,12 +896,12 @@ def _auto_sync_once(trigger):
         # 本机从未与该 Gist 同步过：以 Gist 为准（新机器加入轮换直接拿最新配置）
         if remote_hash == local_hash:
             save_gist_config(dict(g, baseline_hash=remote_hash, synced_at=now_s,
-                                  last_result="已建立基线（本地与 Gist 一致）"))
+                                  last_result="已建立基线"))
         elif not remote_hash:
             if local_rows:
-                gist_push_core(now_s, "已推送（首次建立基线）")
+                gist_push_core(now_s, "已推送")
         else:
-            gist_pull_core(now_s, "已拉取（首次以 Gist 为准）")
+            gist_pull_core(now_s, "已拉取")
         return
 
     local_changed = local_hash != base
@@ -909,13 +909,13 @@ def _auto_sync_once(trigger):
     if not local_changed and not remote_changed:
         return
     if local_changed and not remote_changed:
-        gist_push_core(now_s, "已自动推送（本地有修改）")
+        gist_push_core(now_s, "已推送")
     elif remote_changed and not local_changed:
         if not remote_hash:
             # Gist 上文件被删：本地是最后一致状态，重新推上去
-            gist_push_core(now_s, "已推送（Gist 文件丢失，本地恢复）")
+            gist_push_core(now_s, "已推送")
         else:
-            gist_pull_core(now_s, "已自动拉取（Gist 有更新）")
+            gist_pull_core(now_s, "已拉取")
     else:
         # 两边都改过：跳过并告警，等人工选择上传或下载
         _record_sync("⚠ 冲突：本地与 Gist 都有修改，已跳过自动同步，请手动选择上传或下载")

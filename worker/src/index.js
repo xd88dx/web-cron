@@ -217,10 +217,12 @@ async function gistPushCore(env, now, reason) {
     r = g.gist_id
       ? await fetch(GIST_API + "/" + g.gist_id, {
           method: "PATCH", headers: gistHeaders(g.token),
+          signal: AbortSignal.timeout(15000),
           body: JSON.stringify({ files: { [GIST_FILE]: { content } } }),
         })
       : await fetch(GIST_API, {
           method: "POST", headers: gistHeaders(g.token),
+          signal: AbortSignal.timeout(15000),
           body: JSON.stringify({
             description: "web-cron", public: false,
             files: { [GIST_FILE]: { content } },
@@ -242,7 +244,9 @@ async function gistPullCore(env, now, reason) {
   if (!g.gist_id) throw new Error("还没有 Gist ID，可先执行「上传到 Gist」自动创建");
   let r;
   try {
-    r = await fetch(GIST_API + "/" + g.gist_id, { headers: gistHeaders(g.token) });
+    r = await fetch(GIST_API + "/" + g.gist_id, {
+      headers: gistHeaders(g.token), signal: AbortSignal.timeout(15000),
+    });
   } catch (e) {
     throw new Error("无法访问 GitHub API：" + String((e && e.message) || e));
   }
@@ -296,12 +300,14 @@ async function autoSync(env, trigger) {
     if (!g.gist_id) {
       const tr = await env.DB.prepare("SELECT COUNT(*) c FROM tasks").first();
       if (!Number(tr?.c || 0)) return;
-      await gistPushCore(env, now, "已推送（首次建立基线）");
+      await gistPushCore(env, now, "已推送");
       return;
     }
     let resp;
     try {
-      resp = await fetch(GIST_API + "/" + g.gist_id, { headers: gistHeaders(g.token) });
+      resp = await fetch(GIST_API + "/" + g.gist_id, {
+        headers: gistHeaders(g.token), signal: AbortSignal.timeout(15000),
+      });
     } catch (e) {
       await saveGistConfig(env, { ...g, synced_at: now, last_result: "自动同步失败：无法访问 GitHub API：" + String((e && e.message) || e) });
       return;
@@ -327,12 +333,12 @@ async function autoSync(env, trigger) {
     if (!base) {
       // 本机从未与该 Gist 同步过：以 Gist 为准（新机器加入轮换直接拿最新配置）
       if (remoteHash === localHash) {
-        await saveGistConfig(env, { ...g, baseline_hash: remoteHash, synced_at: now, last_result: "已建立基线（本地与 Gist 一致）" });
+        await saveGistConfig(env, { ...g, baseline_hash: remoteHash, synced_at: now, last_result: "已建立基线" });
       } else if (!remoteHash) {
         const tr = await env.DB.prepare("SELECT COUNT(*) c FROM tasks").first();
-        if (Number(tr?.c || 0)) await gistPushCore(env, now, "已推送（首次建立基线）");
+        if (Number(tr?.c || 0)) await gistPushCore(env, now, "已推送");
       } else {
-        await gistPullCore(env, now, "已拉取（首次以 Gist 为准）");
+        await gistPullCore(env, now, "已拉取");
       }
       return;
     }
@@ -341,13 +347,13 @@ async function autoSync(env, trigger) {
     const remoteChanged = remoteHash !== base;
     if (!localChanged && !remoteChanged) return;
     if (localChanged && !remoteChanged) {
-      await gistPushCore(env, now, "已自动推送（本地有修改）");
+      await gistPushCore(env, now, "已推送");
     } else if (remoteChanged && !localChanged) {
       if (!remoteHash) {
         // Gist 上文件被删：本地是最后一致状态，重新推上去
-        await gistPushCore(env, now, "已推送（Gist 文件丢失，本地恢复）");
+        await gistPushCore(env, now, "已推送");
       } else {
-        await gistPullCore(env, now, "已自动拉取（Gist 有更新）");
+        await gistPullCore(env, now, "已拉取");
       }
     } else {
       // 两边都改过：跳过并告警，等人工选择上传或下载

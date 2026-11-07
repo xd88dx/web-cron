@@ -184,11 +184,13 @@ td .muted{margin-top:3px}
     <div class="muted" style="margin-bottom:12px">把任务配置备份到 GitHub 私密 Gist，在多个部署之间同步。</div>
     <div class="frow"><label>GitHub Token（ghp_ xxx）</label><input id="gToken" placeholder="ghp_xxxxxxxx"></div>
     <div class="frow"><label>Gist ID（留空即可，首次上传自动创建并回填）</label><input id="gGistId" placeholder="留空则上传时自动创建新 Gist"></div>
-    <div class="grid2">
-      <div class="frow"><label class="checkline"><input type="checkbox" id="gAuto"> 自动同步（改动自动推送，对方更新自动拉取）</label></div>
-      <div class="frow"><label>检查间隔（分钟，1-1440）</label><input id="gInterval" type="number" value="5" min="1" max="1440"></div>
+    <div class="frow" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label class="checkline" style="display:flex;align-items:center;font-size:13px;font-weight:400;color:var(--txt);margin:0"><input type="checkbox" id="gAuto"> 自动同步</label>
+      <span class="muted">每</span>
+      <input id="gInterval" type="number" value="5" min="1" max="1440" style="width:76px">
+      <span class="muted">分钟检查一次（1-1440）</span>
     </div>
-    <div class="muted" id="gStatus" style="margin:-6px 0 8px"></div>
+    <div class="muted" id="gStatus" style="margin:2px 0 0"></div>
     <div class="err" id="gistErr"></div>
     <div class="mfoot"><button onclick="document.getElementById('gistOverlay').classList.remove('show')">取消</button><button id="btnGistSave">保存配置</button><button id="btnGistPull">⬇ 从 Gist 下载</button><button id="btnGistPush" class="primary">⬆ 上传到 Gist</button></div>
   </div>

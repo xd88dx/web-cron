@@ -32,6 +32,28 @@ from urllib import request as urlrequest
 from urllib.error import HTTPError, URLError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _load_dotenv():
+    """从 .env 文件加载变量（仅补位，符合默认约定）：
+    系统环境变量优先，.env 只在变量缺失时补上。"""
+    env_path = os.path.join(BASE_DIR, ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip()
+            if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+                v = v[1:-1]
+            os.environ.setdefault(k, v)
+
+
+_load_dotenv()
 DB_PATH = os.path.join(BASE_DIR, "web-cron.db")
 PANEL_PASSWORD = os.environ.get("PANEL_PASSWORD", "").strip()
 APP_TIMEZONE = os.environ.get("APP_TIMEZONE", "").strip() or None

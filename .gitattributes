@@ -1,0 +1,5 @@
+# 行尾权威配置：全部文本文件 LF；Windows 原生脚本例外用 CRLF
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf

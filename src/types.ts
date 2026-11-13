@@ -1,6 +1,7 @@
 // types.ts —— 全项目共享的数据结构
 
-export type Mode = "http" | "browser";
+export type Mode = "http" | "browser" | "ssh";
+export type SshAuth = "password" | "key";
 export type ScheduleType = "interval" | "cron";
 export type WaitUntil = "commit" | "domcontentloaded" | "load" | "networkidle";
 
@@ -22,6 +23,14 @@ export interface Task {
 
   // 双模式
   mode: Mode;
+  // SSH 任务专属字段（mode 为 "ssh" 时生效）
+  ssh_host: string;
+  ssh_port: number;
+  ssh_user: string;
+  ssh_command: string;
+  ssh_auth: SshAuth;
+  ssh_password: string;
+  ssh_key_name: string;
   browser_wait_until: WaitUntil;
   browser_wait_selector: string;
   browser_assert: string;
@@ -100,8 +109,10 @@ export interface StoreData {
   version: number;
   seqTask: number;
   seqHistory: number;
+  seqKey: number;
   tasks: Task[];
   history: HistoryEntry[];
+  sshKeys: SshKey[];
   // Gist 同步配置（token / gist_id），随 store.json 持久化
   gist: GistConfig;
 }
@@ -111,4 +122,13 @@ export interface StoreStats {
   enabled: number;
   runs24: number;
   rate24: number | null;
+}
+
+// SSH 私钥（随 Gist 在多部署间同步；导出备份不含）；任务按名称引用（ssh_key_name）
+export interface SshKey {
+  id: number;
+  name: string;
+  private_key: string;
+  passphrase: string;
+  created_at: number;
 }

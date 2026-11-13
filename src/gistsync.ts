@@ -8,9 +8,9 @@
 // 指纹只算任务配置字段，排除 id / 执行统计 / 时间戳等易变字段，任务跑一次不会被误判为修改。
 import { createHash } from "node:crypto";
 import { computeNextRun } from "./cron.js";
-import { read, mutate, makeTask, taskDefaults } from "./store.js";
+import { read, mutate, makeTask, taskDefaults, normalizeSshKey } from "./store.js";
 import { validateTask, type TaskFields } from "./validate.js";
-import type { Task, StoreData } from "./types.js";
+import type { Task, StoreData, SshKey } from "./types.js";
 
 const TZ = process.env.APP_TIMEZONE || "Asia/Shanghai";
 
@@ -31,6 +31,8 @@ const CONFIG_FIELDS = [
   "mode", "browser_wait_until", "browser_wait_selector", "browser_assert",
   "browser_dwell_ms", "browser_proxy", "browser_ua",
   "browser_screenshot", "http_fallback_browser",
+  "ssh_host", "ssh_port", "ssh_user", "ssh_command",
+  "ssh_auth", "ssh_password", "ssh_key_name",
 ] as const;
 
 // 规范化：按 (sort_order, id) 排序后投影固定字段，保证同一数据稳定得到同一串
@@ -44,8 +46,48 @@ function canonicalConfig(tasks: Task[]): unknown[] {
     });
 }
 
-export function configHash(tasks: Task[]): string {
-  return createHash("sha256").update(JSON.stringify(canonicalConfig(tasks)), "utf8").digest("hex");
+// 密钥指纹：只算 name + 内容（private_key/passphrase）；id/created_at 是本机序号，不参与。
+// 私钥随 Gist 明文同步（私密 Gist，与任务密码同威胁模型）；导出备份仍不含密钥。
+const KEY_FIELDS = ["name", "private_key", "passphrase"] as const;
+
+type KeyFingerprint = Pick<SshKey, "name" | "private_key" | "passphrase">;
+
+function normKey(name: unknown, private_key: unknown, passphrase: unknown): KeyFingerprint {
+  return {
+    name: String(name || "").trim(),
+    private_key: String(private_key || "").replace(/\r\n/g, "\n"),
+    passphrase: String(passphrase || ""),
+  };
+}
+
+function canonicalKeys(keys: KeyFingerprint[]): unknown[] {
+  return [...keys]
+    .map((k) => normKey(k.name, k.private_key, k.passphrase))
+    .filter((k) => k.name)
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((k) => {
+      const o: Record<string, unknown> = {};
+      for (const f of KEY_FIELDS) o[f] = (k as Record<string, unknown>)[f] ?? null;
+      return o;
+    });
+}
+
+// Gist 上的原始密钥 JSON 用同一套规范化，保证两侧指纹可比
+function canonicalRemoteKeys(rawKeys: any[]): KeyFingerprint[] {
+  const list: KeyFingerprint[] = [];
+  for (const rk of Array.isArray(rawKeys) ? rawKeys : []) {
+    const k = rk && typeof rk === "object" ? rk : {};
+    const n = normKey(k.name, k.private_key, k.passphrase);
+    if (n.name) list.push(n);
+  }
+  list.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return list;
+}
+
+export function configHash(tasks: Task[], keys: KeyFingerprint[] = []): string {
+  return createHash("sha256")
+    .update(JSON.stringify([...canonicalConfig(tasks), ...canonicalKeys(keys)]), "utf8")
+    .digest("hex");
 }
 
 // Gist 上的原始 JSON 先过与本地一致的规范化（validate + 默认值 + enabled/sort_order），
@@ -59,9 +101,9 @@ function normalizeForHash(raw: any): Task | null {
   return t;
 }
 
-export function hashLikeLocal(tasks: any[]): string {
+export function hashLikeLocal(tasks: any[], rawKeys: any[] = []): string {
   const normalized = tasks.map(normalizeForHash).filter((t): t is Task => t !== null);
-  return configHash(normalized);
+  return configHash(normalized, canonicalRemoteKeys(rawKeys));
 }
 
 function gistConfig() {
@@ -105,9 +147,10 @@ export async function pushCore(now: number, reason: string): Promise<SyncOutcome
   const g = gistConfig();
   if (!g.token) throw new Error("请先填写 GitHub Token（ghp_ xxx）");
   const tasks = read().tasks;
-  const hash = configHash(tasks);
+  const sshKeys = read().sshKeys;
+  const hash = configHash(tasks, sshKeys);
   const content = JSON.stringify({
-    app: "web-cron-node", version: 1, exported_at: now, tasks,
+    app: "web-cron-node", version: 1, exported_at: now, tasks, sshKeys,
   }, null, 2);
   let r: Response;
   try {
@@ -137,6 +180,29 @@ export async function pushCore(now: number, reason: string): Promise<SyncOutcome
   if (gist_id !== g.gist_id) patch.gist_id = gist_id;
   await setGist(patch);
   return { action: g.gist_id ? "pushed" : "created", gist_id, html_url: j.html_url || "" };
+}
+
+// 密钥合并：按名称 upsert（配置以 Gist 为准），本地多余密钥保留不删（避免误删本机专用密钥）。
+// 返回新增数量；调用方需在 mutate 草稿里执行（draft 与活动数据的 sshKeys 同引用，本函数
+// 先浅拷贝切出来再改，失败回滚不受影响）。
+export function mergeRemoteKeys(store: StoreData, rawKeys: any[], now: number): number {
+  let added = 0;
+  store.sshKeys = store.sshKeys.map((k) => ({ ...k }));
+  for (const rk of Array.isArray(rawKeys) ? rawKeys : []) {
+    const k = normalizeSshKey(rk);
+    if (!k.name || !k.private_key) continue;
+    const hit = store.sshKeys.find((x) => x.name === k.name);
+    if (hit) {
+      hit.private_key = k.private_key;
+      hit.passphrase = k.passphrase;
+    } else {
+      store.seqKey += 1;
+      store.sshKeys.push({ id: store.seqKey, name: k.name, private_key: k.private_key,
+        passphrase: k.passphrase, created_at: now });
+      added++;
+    }
+  }
+  return added;
 }
 
 // 下载：智能合并。名称+URL 相同的老任务原位更新（沿用 id 与执行日志，统计/创建时间保留），
@@ -194,12 +260,13 @@ export async function pullCore(now: number, reason: string): Promise<SyncOutcome
       imported++;
     }
     store.tasks = nextTasks;
+    mergeRemoteKeys(store, d?.sshKeys, now);
     // 清理孤儿日志：不被任何现存任务引用的历史（含历史拉取遗留的）一次性扫掉
     const alive = new Set(nextTasks.map((t) => t.id));
     store.history = store.history.filter((h) => alive.has(h.task_id));
   });
   await setGist({
-    baseline_hash: hashLikeLocal(tasks),
+    baseline_hash: hashLikeLocal(tasks, Array.isArray(d?.sshKeys) ? d.sshKeys : []),
     synced_at: now, last_result: reason,
   });
   return { action: "pulled", imported, skipped, gist_id: g.gist_id };
@@ -243,17 +310,20 @@ async function autoSyncOnce(trigger: "mutation" | "timer"): Promise<string | nul
   }
   const j = await resp.json() as any;
   let remoteTasks: any[] | null = null;
+  let remoteKeys: any[] = [];
   const content = j?.files?.[GIST_FILE]?.content;
   if (typeof content === "string" && content) {
     try {
       const d = JSON.parse(content);
       if (Array.isArray(d?.tasks)) remoteTasks = d.tasks;
+      if (Array.isArray(d?.sshKeys)) remoteKeys = d.sshKeys;
     } catch { /* 内容坏了按远端为空处理 */ }
   }
   const remoteHash = remoteTasks && remoteTasks.length
-    ? hashLikeLocal(remoteTasks) : "";
+    ? hashLikeLocal(remoteTasks, remoteKeys) : "";
 
-  const localHash = configHash(read().tasks);
+  const store = read();
+  const localHash = configHash(store.tasks, store.sshKeys);
   const base = g.baseline_hash;
 
   if (!base) {

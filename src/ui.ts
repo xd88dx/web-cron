@@ -50,6 +50,7 @@ tr:hover td{background:#fafbfd}
 .badge.idle{background:var(--gray-bg);color:var(--muted)}
 .badge.http{background:#eff6ff;color:#1d4ed8}
 .badge.browser{background:var(--purple-bg);color:var(--purple)}
+.badge.ssh{background:#ecfdf5;color:#047857}
 .badge.challenge{background:var(--red-bg);color:var(--red)}
 .muted{color:var(--muted);font-size:12px}
 .ops{display:flex;gap:6px;justify-content:flex-end}
@@ -124,10 +125,10 @@ td .muted{margin-top:3px}
   <div class="modal">
     <h3 id="editTitle">新建任务</h3>
     <div class="frow"><label>任务名称 *</label><input id="fName" placeholder="例：站点保活"></div>
-    <div class="frow"><label>访问地址 URL *</label><input id="fUrl" placeholder="https://example.com/ping"></div>
+    <div class="frow" id="urlRow"><label>访问地址 URL *</label><input id="fUrl" placeholder="https://example.com/ping"></div>
     <div class="grid3">
       <div class="frow"><label>请求方法</label><select id="fMethod"><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>HEAD</option><option>PATCH</option></select></div>
-      <div class="frow"><label>超时（秒，1-120）</label><input id="fTimeout" type="number" value="30" min="1" max="120"></div>
+      <div class="frow"><label>超时（秒，1-120）</label><input id="fTimeout" type="number" value="30" min="1" max="120" oninput="refreshSshPreview()"></div>
       <div class="frow"><label>失败重试（0-5）</label><input id="fRetries" type="number" value="0" min="0" max="5"></div>
     </div>
     <div class="frow hidden" id="browserOnlyHint"><div class="muted">浏览器仿真固定以 GET 导航、不携带请求体。</div></div>
@@ -135,6 +136,7 @@ td .muted{margin-top:3px}
       <select id="fMode" onchange="onModeChange()">
         <option value="http">🌐 HTTP 请求（普通站点，轻量快速）</option>
         <option value="browser">🧭 浏览器仿真（反爬站点，真实模拟）</option>
+        <option value="ssh">🖥 SSH 命令（远程保活/触发，密钥或密码认证）</option>
       </select>
     </div>
     <div class="frow" id="fallbackBox"><label class="checkline"><input type="checkbox" id="fFallback"> HTTP 遇 403/429/503 或挑战页时，自动升级为浏览器仿真重试一次</label></div>
@@ -153,6 +155,34 @@ td .muted{margin-top:3px}
       <div class="frow"><label class="checkline"><input type="checkbox" id="fScreenshot"> 失败或遇到挑战页时保存截图</label></div>
       <div class="muted">每个任务独立保存 Cookie / localStorage（storageState），跨次访问表现为回头客；共享一个常驻 Chromium，并发上限由服务端控制。</div>
     </div>
+    <div class="fieldset hidden" id="sshBox">
+      <legend>🖥 SSH 连接参数</legend>
+      <div class="grid2">
+        <div class="frow"><label>主机 *</label><input id="fSshHost" placeholder="ssh.example.com" oninput="refreshSshPreview()"></div>
+        <div class="frow"><label>端口（1-65535）</label><input id="fSshPort" type="number" value="22" min="1" max="65535" oninput="refreshSshPreview()"></div>
+      </div>
+      <div class="grid2">
+        <div class="frow"><label>用户名 *</label><input id="fSshUser" placeholder="root" oninput="refreshSshPreview()"></div>
+        <div class="frow"><label>认证方式 *</label>
+          <select id="fSshAuth" onchange="onSshAuthChange()">
+            <option value="password">密码</option>
+            <option value="key">私钥（下拉选择，在「管理密钥」中维护）</option>
+          </select>
+        </div>
+      </div>
+      <div class="frow" id="sshPwdRow"><label>密码（随任务配置存储，Gist 同步会包含它）</label><input id="fSshPassword" type="password" placeholder="SSH 登录密码"></div>
+      <div class="frow hidden" id="sshKeyRow"><label>选择密钥 *</label>
+        <div style="display:flex;gap:8px">
+          <select id="fSshKey"><option value="">（尚无密钥，请先管理密钥）</option></select>
+          <button type="button" class="mini" onclick="openKeys()" style="white-space:nowrap">管理密钥…</button>
+        </div>
+      </div>
+      <div class="frow"><label>远程命令 *</label><input id="fSshCommand" placeholder="true" oninput="refreshSshPreview()"></div>
+      <div class="frow"><label>预期命令（实时反显；也可直接粘贴完整 ssh 命令，自动解析回填上方参数）</label>
+        <textarea id="fSshPreview" style="font-family:monospace;min-height:48px" oninput="onSshPreviewInput()" placeholder="ssh -p 2222 user@host true"></textarea>
+      </div>
+      <div class="muted">固定附加 -o BatchMode=yes -o StrictHostKeyChecking=no；超时秒数同时作为连接与命令总超时。私钥经 Gist 同步到各部署；导出备份文件不含私钥。</div>
+    </div>
     <div class="frow"><label>随机加时（分钟，0-1440，0=关闭）</label><input id="fJitter" type="number" value="0" min="0" max="1440"><div class="muted">每次触发前在 0~N 分钟内取随机数累加到固定触发时间，固定间隔与 Cron 均生效，每次触发重新随机</div></div>
     <div class="grid2">
       <div class="frow"><label>调度方式</label>
@@ -163,8 +193,8 @@ td .muted{margin-top:3px}
       <div class="frow" id="intervalBox"><label>间隔（分钟，≥1）</label><input id="fInterval" type="number" value="5" min="1"></div>
       <div class="frow hidden" id="cronBox"><label>Cron 表达式（5 段式，按设置时区判定）</label><input id="fCron" placeholder="*/5 * * * *"></div>
     </div>
-    <div class="frow"><label>请求头（每行 Key: Value，或 JSON 对象，可覆盖默认浏览器头）</label><textarea id="fHeaders" placeholder="Authorization: Bearer xxx"></textarea></div>
-    <div class="frow"><label>请求体 Body（非 GET 时生效，可选）</label><textarea id="fBody" placeholder="{&quot;keepalive&quot;: true}"></textarea></div>
+    <div class="frow" id="headersRow"><label>请求头（每行 Key: Value，或 JSON 对象，可覆盖默认浏览器头）</label><textarea id="fHeaders" placeholder="Authorization: Bearer xxx"></textarea></div>
+    <div class="frow" id="bodyRow"><label>请求体 Body（非 GET 时生效，可选）</label><textarea id="fBody" placeholder="{&quot;keepalive&quot;: true}"></textarea></div>
     <div class="err" id="editErr"></div>
     <div class="mfoot"><button onclick="tryCloseEdit()">取消</button><button class="primary" id="btnSave">保存</button></div>
   </div>
@@ -193,6 +223,23 @@ td .muted{margin-top:3px}
     <div class="muted" id="gStatus" style="margin:2px 0 0"></div>
     <div class="err" id="gistErr"></div>
     <div class="mfoot"><button onclick="document.getElementById('gistOverlay').classList.remove('show')">取消</button><button id="btnGistSave">保存配置</button><button id="btnGistPull">⬇ 从 Gist 下载</button><button id="btnGistPush" class="primary">⬆ 上传到 Gist</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="keysOverlay" data-dismiss="outside">
+  <div class="modal">
+    <h3>🔑 SSH 密钥管理</h3>
+    <div class="muted" style="margin-bottom:12px">私钥随 Gist 同步到各部署（私密 Gist，需 Token 才能读取；与任务密码同一策略）；导出备份文件不含密钥。任务按名称引用密钥，多机无需重复添加。</div>
+    <div id="keysList" style="margin-bottom:14px"></div>
+    <div class="fieldset">
+      <legend>添加密钥</legend>
+      <div class="frow"><label>密钥名称 *（任务按此名称引用）</label><input id="kName" placeholder="例：my-server"></div>
+      <div class="frow"><label>私钥内容 *（粘贴 PEM 格式，含 BEGIN/END 行）</label><textarea id="kPriv" style="font-family:monospace;min-height:110px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea></div>
+      <div class="frow"><label>口令 passphrase（密钥无口令则留空）</label><input id="kPass" type="password"></div>
+      <div class="err" id="keysErr"></div>
+      <div style="text-align:right"><button class="primary mini" onclick="addKey()">保存密钥</button></div>
+    </div>
+    <div class="mfoot"><button onclick="document.getElementById('keysOverlay').classList.remove('show')">关闭</button></div>
   </div>
 </div>
 
@@ -241,18 +288,94 @@ async function doLogin(){
   }catch(e){ $('loginErr').textContent='密码错误'; }
 }
 function onModeChange(){
-  var b=$('fMode').value==='browser';
+  var m=$('fMode').value, b=m==='browser', s=m==='ssh';
   $('browserBox').classList.toggle('hidden',!b);
-  $('fallbackBox').classList.toggle('hidden',b);
-  // 浏览器模式：page.goto 固定 GET 且不能携带 body，这两项不生效 -> 置为只读。
+  $('sshBox').classList.toggle('hidden',!s);
+  $('fallbackBox').classList.toggle('hidden',b||s);
+  // SSH 任务没有 URL / 请求头 / 请求体，隐藏对应行
+  $('urlRow').classList.toggle('hidden',s);
+  $('headersRow').classList.toggle('hidden',s);
+  $('bodyRow').classList.toggle('hidden',s);
+  // 浏览器模式 page.goto 固定 GET 且不能携带 body；SSH 模式下 method 无意义 -> 置为只读。
   // <select> 没有 readonly 属性，只能用 disabled；disabled 元素的 .value 仍可读，save() 不受影响。
-  $('fMethod').disabled=b;
+  $('fMethod').disabled=b||s;
   $('fBody').readOnly=b;
   $('browserOnlyHint').classList.toggle('hidden',!b);
+  if(s){ onSshAuthChange(); refreshSshPreview(); }
+}
+function onSshAuthChange(){
+  var key=$('fSshAuth').value==='key';
+  $('sshPwdRow').classList.toggle('hidden',key);
+  $('sshKeyRow').classList.toggle('hidden',!key);
+}
+// ---- SSH 双向命令区：参数 -> 预览实时反显；粘贴命令 -> 解析回填参数 ----
+var sshSyncing=false;
+function buildSshCmd(){
+  var host=$('fSshHost').value.trim()||'<host>';
+  var port=$('fSshPort').value.trim()||'22';
+  var user=$('fSshUser').value.trim()||'<user>';
+  var cmd=$('fSshCommand').value;
+  var t=$('fTimeout').value||'30';
+  return 'ssh -p '+port+' -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout='+t+' '+user+'@'+host+(cmd?' '+cmd:'');
+}
+function refreshSshPreview(){
+  if(sshSyncing) return;
+  sshSyncing=true;
+  $('fSshPreview').value=buildSshCmd();
+  sshSyncing=false;
+}
+// 解析粘贴的 ssh 命令：-p 端口 / -l 用户 / user@host / 其余原文作命令（保留引号空格）；
+// ConnectTimeout 映射到超时秒；BatchMode/StrictHostKeyChecking 及未知选项（含 -i）静默忽略。
+function parseSshCmd(text){
+  var s=String(text||'').trim().replace(/^\s*ssh\s+/,'');
+  if(!s) return null;
+  var port=null, user='', host=null, ct=null, m, rest=s;
+  while(true){
+    if((m=rest.match(/^-p\s*(\d+)\s*/))){ port=m[1]; rest=rest.slice(m[0].length); continue; }
+    if((m=rest.match(/^-l\s+(\S+)\s*/))){ user=m[1]; rest=rest.slice(m[0].length); continue; }
+    if((m=rest.match(/^-i\s+(\S+)\s*/))){ rest=rest.slice(m[0].length); continue; }
+    if((m=rest.match(/^-o\s+ConnectTimeout=(\d+)\s*/i))){ ct=m[1]; rest=rest.slice(m[0].length); continue; }
+    if((m=rest.match(/^-o\s+(\S+)\s*/))){ rest=rest.slice(m[0].length); continue; }
+    if((m=rest.match(/^-\S+\s*/))){ rest=rest.slice(m[0].length); continue; }
+    break;
+  }
+  var tm=rest.match(/^(\S*)@(\S+?)\s+([\s\S]+)$/);
+  if(tm){ user=tm[1]||user; host=tm[2]; rest=tm[3]; }
+  else{
+    var hm=rest.match(/^(\S+?)\s+([\s\S]+)$/);
+    if(hm){ host=hm[1]; rest=hm[2]; }
+    else{ host=rest; rest=''; }
+  }
+  if(!host||/^-/.test(host)) return null;
+  return { host:host, port:port, user:user, cmd:rest, timeout:ct };
+}
+function onSshPreviewInput(){
+  if(sshSyncing) return;
+  var p=parseSshCmd($('fSshPreview').value);
+  if(!p) return; // 解析不出主机就不动参数，避免清空用户输入
+  sshSyncing=true;
+  if(p.host){ $('fSshHost').value=p.host; }
+  if(p.port){ $('fSshPort').value=p.port; }
+  if(p.user){ $('fSshUser').value=p.user; }
+  $('fSshCommand').value=p.cmd;
+  if(p.timeout){ $('fTimeout').value=p.timeout; }
+  sshSyncing=false;
+  refreshSshPreview();
+}
+function fillSshKeySelect(selected){
+  var sel=$('fSshKey');
+  api('/api/sshkeys').then(function(d){
+    var keys=d.keys||[];
+    var opts=keys.length?'<option value="">（请选择密钥）</option>':'<option value="">（尚无密钥，请先「管理密钥」添加）</option>';
+    keys.forEach(function(k){ opts+='<option value="'+esc(k.name)+'">'+esc(k.name)+'</option>'; });
+    sel.innerHTML=opts;
+    sel.value=selected||'';
+  }).catch(function(){ sel.innerHTML='<option value="">（密钥列表加载失败）</option>'; });
 }
 function schedText(t){ return t.schedule_type==='cron' ? 'cron: '+t.cron_expr : '每 '+t.interval_minutes+' 分钟'; }
 function modeBadge(t){
   if(t.mode==='browser') return '<span class="badge browser" title="真实 Chromium 仿真">🧭 浏览器</span>';
+  if(t.mode==='ssh') return '<span class="badge ssh" title="SSH 命令执行">🖥 SSH</span>';
   return '<span class="badge http" title="纯 HTTP 请求">🌐 HTTP</span>'+(t.http_fallback_browser?'<div class="muted">可自动升级</div>':'');
 }
 function lastBadge(t){
@@ -279,7 +402,7 @@ function render(d){
   $('taskBody').innerHTML = d.tasks.map(function(t){
     return '<tr draggable="true" data-id="'+t.id+'">'+
       '<td>'+(t.enabled?'<span class="badge on">● 运行中</span>':'<span class="badge off">⏸ 已暂停</span>')+'</td>'+
-      '<td><span class="tname">'+esc(t.name)+'</span><span class="turl" title="'+esc(t.url)+'">'+esc(t.method)+' '+esc(t.url)+'</span></td>'+
+      '<td><span class="tname">'+esc(t.name)+'</span><span class="turl" title="'+esc(t.mode==='ssh'?('SSH '+t.ssh_user+'@'+t.ssh_host+':'+t.ssh_port+' → '+t.ssh_command):t.url)+'">'+(t.mode==='ssh'?esc('SSH '+t.ssh_user+'@'+t.ssh_host+':'+t.ssh_port+' → '+t.ssh_command):esc(t.method+' '+t.url))+'</span></td>'+
       '<td>'+modeBadge(t)+'</td>'+
       '<td>'+esc(schedText(t))+(t.retries>0?'<div class="muted">失败重试 '+t.retries+' 次</div>':'')+(t.jitter_minutes>0?'<div class="muted">+ 随机 0~'+t.jitter_minutes+' 分钟</div>':'')+'</td>'+
       '<td>'+lastBadge(t)+'<div class="muted">'+esc(fmt(t.last_run_at))+'</div>'+(t.last_challenge?'<span class="badge challenge">挑战页</span>':'')+'</td>'+
@@ -378,6 +501,13 @@ function openEdit(id){
   $('fJitter').value=t.jitter_minutes==null?0:t.jitter_minutes;
   $('fCron').value=t.cron_expr||''; $('fHeaders').value=t.headers||''; $('fBody').value=t.body||'';
   $('fMode').value=t.mode||'http';
+  $('fSshHost').value=t.ssh_host||'';
+  $('fSshPort').value=t.ssh_port==null?22:t.ssh_port;
+  $('fSshUser').value=t.ssh_user||'';
+  $('fSshCommand').value=t.ssh_command||'';
+  $('fSshAuth').value=t.ssh_auth||'password';
+  $('fSshPassword').value=t.ssh_password||'';
+  fillSshKeySelect(t.ssh_key_name||'');
   $('fWaitUntil').value=t.browser_wait_until||'domcontentloaded';
   $('fWaitSelector').value=t.browser_wait_selector||'';
   $('fAssert').value=t.browser_assert||'';
@@ -417,7 +547,12 @@ function save(){
     schedule_type:$('fStype').value, interval_minutes:+$('fInterval').value,
     jitter_minutes:+$('fJitter').value||0,
     cron_expr:$('fCron').value, headers:$('fHeaders').value, body:$('fBody').value,
-    mode:$('fMode').value, browser_wait_until:$('fWaitUntil').value,
+    mode:$('fMode').value,
+    ssh_host:$('fSshHost').value, ssh_port:+$('fSshPort').value||22,
+    ssh_user:$('fSshUser').value, ssh_command:$('fSshCommand').value,
+    ssh_auth:$('fSshAuth').value, ssh_password:$('fSshPassword').value,
+    ssh_key_name:$('fSshKey').value,
+    browser_wait_until:$('fWaitUntil').value,
     browser_wait_selector:$('fWaitSelector').value, browser_assert:$('fAssert').value,
     browser_dwell_ms:+$('fDwell').value, browser_proxy:$('fProxy').value,
     browser_ua:$('fUa').value, browser_screenshot:$('fScreenshot').checked?1:0,
@@ -430,8 +565,8 @@ async function runNow(id){
   toast('正在执行…');
   try{
     var r=await api('/api/tasks/'+id+'/run',{method:'POST'});
-    if(r.result.ok) toast('✓ 成功 · '+r.result.mode+' · HTTP '+r.result.status_code+' · '+r.result.duration_ms+'ms');
-    else toast('✗ 失败 · '+(r.result.error||('HTTP '+r.result.status_code)));
+    if(r.result.ok) toast('✓ 成功 · '+r.result.mode+' · '+(r.result.mode==='ssh'?'exit ':'HTTP ')+r.result.status_code+' · '+r.result.duration_ms+'ms');
+    else toast('✗ 失败 · '+(r.result.error||(r.result.mode==='ssh'?('exit '+r.result.status_code):('HTTP '+r.result.status_code))));
     load();
   }catch(e){ toast('执行失败: '+e.message); }
 }
@@ -470,7 +605,7 @@ async function showLog(id){
         if(h.snippet) detail+='<div class="snippet">'+esc(h.snippet)+'</div>';
         return '<tr><td class="muted" style="white-space:nowrap">'+esc(fmt(h.run_at))+'</td>'+
           '<td>'+(h.ok?'<span class="histok">成功</span>':'<span class="histfail">失败</span>')+'</td>'+
-          '<td>'+(h.mode==='browser'?'<span class="badge browser">🧭 浏览器</span>':'<span class="badge http">🌐 HTTP</span>')+'</td>'+
+          '<td>'+(h.mode==='browser'?'<span class="badge browser">🧭 浏览器</span>':h.mode==='ssh'?'<span class="badge ssh">🖥 SSH</span>':'<span class="badge http">🌐 HTTP</span>')+'</td>'+
           '<td class="muted">'+(h.status_code==null?'-':h.status_code)+'<br>'+h.duration_ms+'ms</td>'+
           '<td>'+detail+'</td></tr>';
       }).join('')+'</tbody></table>';
@@ -499,6 +634,43 @@ $('importFile').onchange=async function(ev){
   }catch(e){ toast('导入失败: '+e.message); }
   ev.target.value='';
 };
+// ---- SSH 密钥管理：只回名称与元信息，私钥内容永不出服务端 ----
+async function openKeys(){
+  $('keysErr').textContent='';
+  $('keysOverlay').classList.add('show');
+  loadKeys();
+}
+async function loadKeys(){
+  try{
+    var d=await api('/api/sshkeys');
+    var keys=d.keys||[];
+    var el=$('keysList');
+    if(!keys.length){ el.innerHTML='<div class="muted">还没有密钥，在下方添加一把。</div>'; return; }
+    el.innerHTML=keys.map(function(k){
+      return '<div style="display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:6px">'+
+        '<div><b>'+esc(k.name)+'</b><span class="muted">'+(k.has_passphrase?' · 有口令':'')+'</span></div>'+
+        '<button class="icon danger" title="删除" onclick="delKey('+k.id+')">'+svgIcon('del')+'</button></div>';
+    }).join('');
+  }catch(e){ $('keysErr').textContent=e.message; }
+}
+async function addKey(){
+  $('keysErr').textContent='';
+  try{
+    await api('/api/sshkeys',{method:'POST',body:JSON.stringify({
+      name:$('kName').value, private_key:$('kPriv').value, passphrase:$('kPass').value })});
+    $('kName').value=''; $('kPriv').value=''; $('kPass').value='';
+    toast('密钥已保存');
+    loadKeys(); fillSshKeySelect($('fSshKey').value);
+  }catch(e){ $('keysErr').textContent=e.message; }
+}
+async function delKey(id){
+  if(!confirm('确定删除这把密钥吗？引用它的 SSH 任务将执行失败。')) return;
+  try{
+    await api('/api/sshkeys/'+id,{method:'DELETE'});
+    toast('已删除');
+    loadKeys(); fillSshKeySelect($('fSshKey').value);
+  }catch(e){ $('keysErr').textContent=e.message; }
+}
 // ---- Gist 同步：先保存弹窗里的配置再执行上传/下载，改完 Token 直接点即可 ----
 function closeGist(){ document.getElementById('gistOverlay').classList.remove('show'); }
 function openGist(){

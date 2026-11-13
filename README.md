@@ -31,6 +31,7 @@
 - **双模式**（每个任务独立配置）：
   - `🌐 HTTP`：Node fetch + 固定真实浏览器 UA + 完整浏览器头（Accept-Language / sec-ch-ua 版本对齐 / Sec-Fetch-*）
   - `🧭 浏览器仿真`：真实 headless Chromium，执行 JS、渲染 DOM、加载子资源、跟随重定向、自动 Cookie
+  - `🖥 SSH 命令`：定时在远程服务器执行一条命令（保活 / 远程触发），密码或私钥认证，详见下方「SSH 命令任务」
 - **自动升级**：HTTP 模式任务开启开关后，遇 403 / 429 / 503 / 挑战页时自动用浏览器重试一次
 - **自动降级**：环境无 Chromium 时，浏览器模式任务自动按 HTTP 执行并在面板与日志中标注 `已降级`
 - 拟人化：UA 按任务固定（不再逐次随机）、`navigator.webdriver` 抹除、viewport/locale/timezone/dpr、每任务独立 `storageState` 持久化（跨次访问表现为回头客）、可选停留与滚动
@@ -187,10 +188,28 @@ Client Hints 会被置空（Chromium 无法真正删除该头），`navigator.us
 > 且 UA 中不含 `HeadlessChrome`。bot.sannysoft.com 渲染后 `WebDriver (New)` / `WebDriver Advanced`
 > 均为 passed，`Plugins` / `Permissions` / `HEADCHR_*` 检测通过。
 
+## SSH 命令任务（🖥 SSH 模式，Node 主线独有）
+
+定时在远程服务器执行一条命令（如保活 `true`、触发脚本），基于 `ssh2` 纯 JS 库，Windows/Linux 行为一致。
+
+- **认证方式**：密码，或私钥（服务端可存多把私钥，任务表单下拉选择；入口在 SSH 参数区的「管理密钥…」）
+- **双向命令区**：SSH 参数区下方实时反显预期命令（含固定附加的 `-o` 参数）；也可以把现成的
+  `ssh -p 2222 -o BatchMode=yes user@host true` 直接粘贴进去，自动解析回填主机 / 端口 / 用户 / 命令 / 超时
+- 固定附加 `-o BatchMode=yes -o StrictHostKeyChecking=no`（不校验主机指纹，等价 StrictHostKeyChecking=no）；
+  超时秒数同时作为连接与命令总超时；成功 = 远程命令 exit 0，退出码记入状态列，stdout/stderr 前 2000 字符入日志
+- 失败重试 / 随机加时 / 间隔与 cron 调度 / Gist 同步对 SSH 任务同样生效（url 形如 `ssh://user@host:port`）
+
+**SSH 专属限制**：
+
+- **私钥随 Gist 明文同步**（私密 Gist，持 Token 者与 GitHub 可读，与任务密码同一威胁模型）：一台机器添加密钥后自动同步到其他部署，同名任务拉取后直接可用，无需逐机配置；**导出备份文件仍不含密钥**
+- 任务密码随任务配置进 Gist（与 HTTP 任务自定义 Authorization 头的现状一致），介意请统一用密钥方式
+- `worker/` 与 `freehost/` 版不认识 `mode:"ssh"`：拉取时按无效任务跳过（安全），但**对方再推送会把 ssh 任务从 Gist 抹掉**——SSH 任务只在 Node 主线机器间启用自动同步
+- SSH 任务与密钥都进指纹字段集，升级后首次自动同步会报一次「两边都有修改」冲突，手动上传一次重建基线即可
+
 ## 验证
 
 ```bash
-npm run build && npm test     # 37 项纯逻辑单测（cron / 时区 / 随机加时 / UA / 请求头 / 浏览器身份自洽 / 挑战页判定）
+npm run build && npm test     # 51 项纯逻辑单测（cron / 时区 / 随机加时 / UA / 请求头 / 浏览器身份自洽 / 挑战页判定 / SSH 校验与认证解析）
 ```
 
 端到端手动验证：创建 HTTP 任务 → 立即执行 → 查看日志；创建浏览器任务 → 确认 `navigator.webdriver` 被删除、Cookie 跨两次执行保留；把 `next_run_at` 改到过去触发定时链路；无 Chromium 环境确认降级路径。

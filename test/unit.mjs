@@ -7,7 +7,9 @@ import {
   describeBrowserUa, browserIdentity, uaDataInitScript,
 } from "../dist/headers.js";
 import { looksLikeChallenge, shouldFallback } from "../dist/http.js";
-import { configHash, hashLikeLocal } from "../dist/gistsync.js";
+import { configHash, hashLikeLocal, mergeRemoteKeys } from "../dist/gistsync.js";
+import { validateTask } from "../dist/validate.js";
+import { resolveSshAuth } from "../dist/ssh.js";
 
 let pass = 0;
 function t(name, fn) {
@@ -209,7 +211,10 @@ function cfg(over) {
     name: "保活", url: "https://example.com/", method: "GET", headers: "", body: "",
     schedule_type: "interval", interval_minutes: 5, cron_expr: null, jitter_minutes: 3,
     timeout_seconds: 30, retries: 0, enabled: 1, sort_order: 1,
-    mode: "http", browser_wait_until: "domcontentloaded", browser_wait_selector: "",
+    mode: "http",
+    ssh_host: "", ssh_port: 22, ssh_user: "", ssh_command: "",
+    ssh_auth: "password", ssh_password: "", ssh_key_name: "",
+    browser_wait_until: "domcontentloaded", browser_wait_selector: "",
     browser_assert: "", browser_dwell_ms: 0, browser_proxy: "", browser_ua: "",
     browser_screenshot: 0, http_fallback_browser: 0,
   }, over);
@@ -241,6 +246,94 @@ t("指纹：Gist 原始数据经规范化后与本地一致（validate + 默认�
 t("指纹：非法任务在规范化时被剔除（与拉取跳过逻辑一致）", () => {
   const good = cfg({ id: 1 });
   assert.equal(hashLikeLocal([good, { name: "" }]), configHash([good]));
+});
+t("指纹：SSH 字段变化（主机/密码）会改变", () => {
+  const base = configHash([cfg({ id: 1 })]);
+  assert.notEqual(base, configHash([cfg({ id: 1, ssh_host: "h2.example.com" })]));
+  assert.notEqual(base, configHash([cfg({ id: 1, ssh_password: "p2" })]));
+});
+function keyCfg(over) {
+  return Object.assign({ id: 1, name: "my-server", private_key: "-----BEGIN X-----\nAAA\n-----END X-----",
+    passphrase: "pp", created_at: 111 }, over);
+}
+t("指纹：密钥内容变化会改变，id/created_at 不参与", () => {
+  const base = configHash([cfg({ id: 1 })], [keyCfg({})]);
+  assert.notEqual(base, configHash([cfg({ id: 1 })], [keyCfg({ private_key: "-----BEGIN Y-----" })]));
+  assert.notEqual(base, configHash([cfg({ id: 1 })], [keyCfg({ passphrase: "pp2" })]));
+  assert.notEqual(base, configHash([cfg({ id: 1 })], []));
+  // 本机 id 序号不同不影响指纹（两台机器各自续号）
+  assert.equal(configHash([cfg({ id: 1 })], [keyCfg({ id: 7, created_at: 999 })]), base);
+});
+t("指纹：Gist 原始密钥经规范化后与本地一致", () => {
+  const local = configHash([cfg({ id: 1 })], [keyCfg({})]);
+  // 远端 JSON：id/created_at 是对端序号，带 \r\n 也应规范化对齐
+  const remote = [{ ...keyCfg({ id: 42, created_at: 1 }), private_key: "-----BEGIN X-----\r\nAAA\r\n-----END X-----" }];
+  assert.equal(hashLikeLocal([cfg({ id: 9 })], remote), local);
+});
+t("指纹：密钥列表缺省，单参调用兼容", () => {
+  assert.equal(configHash([cfg({ id: 1 })]), configHash([cfg({ id: 1 })], []));
+});
+t("mergeRemoteKeys：新密钥续号插入，同名更新内容沿用 id", () => {
+  const s = { sshKeys: [], seqKey: 0 };
+  assert.equal(mergeRemoteKeys(s, [{ name: "a", private_key: "K1", passphrase: "" }], 100), 1);
+  assert.deepEqual(s.sshKeys.map((k) => [k.id, k.name, k.private_key]), [[1, "a", "K1"]]);
+  assert.equal(s.seqKey, 1);
+  // 同名再拉：更新内容、沿用 id，不新增
+  assert.equal(mergeRemoteKeys(s, [{ name: "a", private_key: "K2", passphrase: "p" }], 200), 0);
+  assert.deepEqual(s.sshKeys.map((k) => [k.id, k.name, k.private_key, k.passphrase]),
+    [[1, "a", "K2", "p"]]);
+});
+t("mergeRemoteKeys：本地多余密钥保留；非法条目跳过", () => {
+  const s = { sshKeys: [{ id: 5, name: "local-only", private_key: "L", passphrase: "", created_at: 1 }], seqKey: 5 };
+  mergeRemoteKeys(s, [{ name: "a", private_key: "K1" }, { name: "", private_key: "x" }, "junk"], 100);
+  assert.deepEqual(s.sshKeys.map((k) => k.name), ["local-only", "a"]);
+  assert.equal(s.seqKey, 6);
+});
+t("mergeRemoteKeys：空/缺 sshKeys 字段不动本地密钥（对端旧版本推送场景）", () => {
+  const s = { sshKeys: [{ id: 1, name: "a", private_key: "K", passphrase: "", created_at: 1 }], seqKey: 1 };
+  assert.equal(mergeRemoteKeys(s, undefined, 100), 0);
+  assert.equal(s.sshKeys.length, 1);
+});
+
+console.log("== SSH 任务校验与认证解析 ==");
+function sshCfg(over) {
+  return cfg({ mode: "ssh", name: "SSH 保活", ssh_host: "ssh.example.com", ssh_port: 2222,
+    ssh_user: "ibssh_xxx", ssh_command: "true", ssh_auth: "password", ssh_password: "pw", ...over });
+}
+t("validateTask：SSH 任务 url 自动推导为 ssh://user@host:port", () => {
+  const f = validateTask(sshCfg({ url: "" }));
+  assert.equal(f.url, "ssh://ibssh_xxx@ssh.example.com:2222");
+});
+t("validateTask：SSH 缺主机/用户/命令报错", () => {
+  assert.throws(() => validateTask(sshCfg({ url: "", ssh_host: "" })), /主机/);
+  assert.throws(() => validateTask(sshCfg({ url: "", ssh_user: "" })), /用户名/);
+  assert.throws(() => validateTask(sshCfg({ url: "", ssh_command: "" })), /命令/);
+});
+t("validateTask：SSH 端口钳制与认证方式二值化", () => {
+  const f = validateTask(sshCfg({ url: "", ssh_port: 99999, ssh_auth: "bogus" }));
+  assert.equal(f.ssh_port, 65535);
+  assert.equal(f.ssh_auth, "password");
+});
+t("validateTask：密钥方式必须选择密钥名称", () => {
+  assert.throws(() => validateTask(sshCfg({ url: "", ssh_auth: "key", ssh_key_name: "" })), /密钥/);
+});
+t("validateTask：http 模式仍然要求 http URL", () => {
+  assert.throws(() => validateTask(cfg({ url: "ssh://x", mode: "http" })), /http/);
+});
+t("resolveSshAuth：密码方式直接返回密码", () => {
+  const a = resolveSshAuth(sshCfg({}), []);
+  assert.deepEqual(a, { kind: "password", password: "pw" });
+});
+t("resolveSshAuth：密钥方式按名称命中本机密钥", () => {
+  const keys = [{ id: 1, name: "my-server", private_key: "-----BEGIN X-----", passphrase: "pp", created_at: 1 }];
+  const a = resolveSshAuth(sshCfg({ ssh_auth: "key", ssh_key_name: "my-server" }), keys);
+  assert.deepEqual(a, { kind: "key", privateKey: "-----BEGIN X-----", passphrase: "pp" });
+});
+t("resolveSshAuth：密钥名称不存在时报错并提示去管理密钥添加", () => {
+  assert.throws(
+    () => resolveSshAuth(sshCfg({ ssh_auth: "key", ssh_key_name: "ghost" }), []),
+    /密钥不存在：ghost/,
+  );
 });
 
 console.log("\n通过 " + pass + " 项" + (process.exitCode ? "（有失败）" : "，全部通过"));

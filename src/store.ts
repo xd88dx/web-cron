@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { computeNextRun } from "./cron.js";
-import type { StoreData, Task, HistoryEntry, StoreStats, GistConfig } from "./types.js";
+import type { StoreData, Task, HistoryEntry, StoreStats, GistConfig, SshKey } from "./types.js";
 import type { TaskFields } from "./validate.js";
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR || "data");
@@ -14,7 +14,11 @@ const TZ = process.env.APP_TIMEZONE || "Asia/Shanghai";
 export const HISTORY_KEEP = 200;
 
 function empty(): StoreData {
-  return { version: 1, seqTask: 0, seqHistory: 0, tasks: [], history: [], gist: normalizeGist(null) };
+  return {
+    version: 1, seqTask: 0, seqHistory: 0, seqKey: 0,
+    tasks: [], history: [], sshKeys: [],
+    gist: normalizeGist(null),
+  };
 }
 
 // Gist 同步配置：旧数据没有该字段时补默认值
@@ -38,7 +42,10 @@ export function taskDefaults(): Omit<Task, "id" | "name" | "url"> {
     schedule_type: "interval", interval_minutes: 5, cron_expr: null,
     jitter_minutes: 0,
     timeout_seconds: 30, retries: 0, enabled: 1,
-    mode: "http", browser_wait_until: "domcontentloaded",
+    mode: "http",
+    ssh_host: "", ssh_port: 22, ssh_user: "", ssh_command: "",
+    ssh_auth: "password", ssh_password: "", ssh_key_name: "",
+    browser_wait_until: "domcontentloaded",
     browser_wait_selector: "", browser_assert: "", browser_dwell_ms: 0,
     browser_proxy: "", browser_ua: "", browser_screenshot: 0,
     http_fallback_browser: 0,
@@ -53,6 +60,18 @@ export function taskDefaults(): Omit<Task, "id" | "name" | "url"> {
 
 function normalizeTask(t: any): Task {
   return { ...taskDefaults(), ...t } as Task;
+}
+
+// SSH 私钥：旧数据/手改数据缺字段时补默认值
+export function normalizeSshKey(raw: any): SshKey {
+  const k = raw && typeof raw === "object" ? raw : {};
+  return {
+    id: Number(k.id) || 0,
+    name: String(k.name || "").trim(),
+    private_key: String(k.private_key || ""),
+    passphrase: String(k.passphrase || ""),
+    created_at: Number(k.created_at) || Date.now(),
+  };
 }
 
 // 新建任务：默认值在前，f 覆盖；next_run_at 按调度类型（含随机加时）计算
@@ -70,7 +89,8 @@ function normalizeHistory(h: any): HistoryEntry {
     task_name: String(h.task_name || ""), run_at: Number(h.run_at) || 0,
     ok: h.ok ? 1 : 0, status_code: h.status_code ?? null,
     duration_ms: Number(h.duration_ms) || 0, error: String(h.error || ""),
-    snippet: String(h.snippet || ""), mode: h.mode === "browser" ? "browser" : "http",
+    snippet: String(h.snippet || ""),
+    mode: h.mode === "browser" ? "browser" : h.mode === "ssh" ? "ssh" : "http",
     final_url: String(h.final_url || ""), page_title: String(h.page_title || ""),
     challenge: h.challenge ? 1 : 0, screenshot: String(h.screenshot || ""),
     degraded: h.degraded ? 1 : 0, note: String(h.note || ""),
@@ -89,11 +109,15 @@ export function initStore(): void {
       const raw = JSON.parse(fsSync.readFileSync(FILE, "utf8"));
       const tasks: Task[] = Array.isArray(raw.tasks) ? raw.tasks.map(normalizeTask) : [];
       const history: HistoryEntry[] = Array.isArray(raw.history) ? raw.history.map(normalizeHistory) : [];
+      const sshKeys: SshKey[] = Array.isArray(raw.sshKeys)
+        ? raw.sshKeys.map(normalizeSshKey).filter((k: SshKey) => k.id && k.name)
+        : [];
       data = {
         version: 1,
         seqTask: Number(raw.seqTask) || tasks.reduce((m, t) => Math.max(m, t.id), 0),
         seqHistory: Number(raw.seqHistory) || history.reduce((m, h) => Math.max(m, h.id), 0),
-        tasks, history,
+        seqKey: Number(raw.seqKey) || sshKeys.reduce((m, k) => Math.max(m, k.id), 0),
+        tasks, history, sshKeys,
         gist: normalizeGist(raw.gist),
       };
     } catch (e) {

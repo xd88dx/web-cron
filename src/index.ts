@@ -190,6 +190,55 @@ app.get("/api/tasks/:id/history", async (req, reply) => {
   return json(reply, { history: historyFor(id, limit), timezone: TZ });
 });
 
+// --------------------------------------------------------------------------- SSH 密钥
+// 私钥经 Gist 在多部署间同步（gistsync.ts），导出备份仍不含密钥；
+// 列表只回名称与元信息，不回私钥内容。
+
+app.get("/api/sshkeys", async (_req, reply) => {
+  const keys = [...read().sshKeys].sort((a, b) => a.id - b.id);
+  return json(reply, {
+    keys: keys.map((k) => ({
+      id: k.id, name: k.name, created_at: k.created_at,
+      has_passphrase: Boolean(k.passphrase),
+    })),
+    timezone: TZ,
+  });
+});
+
+app.post("/api/sshkeys", async (req, reply) => {
+  const d = (req.body || {}) as any;
+  const name = String(d.name || "").trim();
+  const private_key = String(d.private_key || "").replace(/\r\n/g, "\n");
+  const passphrase = String(d.passphrase || "");
+  if (!name) return fail(reply, "密钥名称不能为空");
+  if (!private_key.includes("PRIVATE KEY")) {
+    return fail(reply, "私钥内容无效（应包含 -----BEGIN ... PRIVATE KEY-----）");
+  }
+  const key = await mutate((db: StoreData) => {
+    if (db.sshKeys.some((k) => k.name === name)) return null;
+    db.seqKey += 1;
+    const k = { id: db.seqKey, name, private_key, passphrase, created_at: Date.now() };
+    db.sshKeys.push(k);
+    return k;
+  });
+  if (!key) return fail(reply, "同名密钥已存在", 409);
+  scheduleMutationSync();
+  return json(reply, { ok: true, id: key.id });
+});
+
+app.delete("/api/sshkeys/:id", async (req, reply) => {
+  const id = Number((req.params as any).id);
+  const ok = await mutate((db) => {
+    const i = db.sshKeys.findIndex((k) => k.id === id);
+    if (i < 0) return false;
+    db.sshKeys.splice(i, 1);
+    return true;
+  });
+  if (!ok) return fail(reply, "密钥不存在", 404);
+  scheduleMutationSync();
+  return json(reply, { ok: true });
+});
+
 app.get("/api/export", async (_req, reply) => {
   return json(reply, exportPayload());
 });

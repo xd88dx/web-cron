@@ -4,6 +4,7 @@
 // Node 单进程单事件循环，天然没有多 worker 各起一份调度器的问题。
 import { computeNextRun } from "./cron.js";
 import { doHttp, shouldFallback } from "./http.js";
+import { doSsh } from "./ssh.js";
 import { browserState, executeBrowser } from "./browser.js";
 import { mutate, read, insertHistory, getTask } from "./store.js";
 import type { Task, ExecResult } from "./types.js";
@@ -17,6 +18,12 @@ export function isRunning(id: number): boolean { return running.has(id); }
 
 // 单次执行：按 mode 分派，并处理「自动升级」与「环境降级」
 async function executeOnce(task: Task): Promise<ExecResult> {
+  if (task.mode === "ssh") {
+    const res = await doSsh(task, read().sshKeys);
+    res.note = "SSH 命令";
+    return res;
+  }
+
   const capable = browserState().capable;
   const wantBrowser = task.mode === "browser";
 

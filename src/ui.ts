@@ -329,8 +329,9 @@ function refreshSshPreview(){
 }
 // 解析粘贴的 ssh 命令：-p 端口 / -l 用户 / user@host / 其余原文作命令（保留引号空格）；
 // ConnectTimeout 映射到超时秒；BatchMode/StrictHostKeyChecking 及未知选项（含 -i）静默忽略。
+// 先做 shell 归一化：续行符（行尾 \ + 换行）还原为空格、连续空白折叠，兼容多行粘贴。
 function parseSshCmd(text){
-  var s=String(text||'').trim().replace(/^\s*ssh\s+/,'');
+  var s=String(text||'').replace(/\\\s*\n\s*/g,' ').replace(/\s+/g,' ').trim().replace(/^ssh\s+/,'');
   if(!s) return null;
   var port=null, user='', host=null, ct=null, m, rest=s;
   while(true){

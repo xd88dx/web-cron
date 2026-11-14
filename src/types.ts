@@ -8,6 +8,7 @@ export type WaitUntil = "commit" | "domcontentloaded" | "load" | "networkidle";
 export interface Task {
   id: number;
   name: string;
+  group: string; // 所属分组（可选，面板筛选用；空 = 无分组）
   url: string;
   method: string;
   headers: string;

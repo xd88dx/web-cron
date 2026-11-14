@@ -88,6 +88,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS tasks(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
+                "group" TEXT NOT NULL DEFAULT '',
                 url TEXT NOT NULL,
                 method TEXT NOT NULL DEFAULT 'GET',
                 headers TEXT NOT NULL DEFAULT '',
@@ -136,6 +137,10 @@ def init_db():
         if "jitter_minutes" not in cols:
             conn.execute("ALTER TABLE tasks ADD COLUMN jitter_minutes INTEGER NOT NULL DEFAULT 0")
             app.logger.info("已迁移：tasks 表新增 jitter_minutes 列")
+        # group 是 SQL 关键字，建列与读写都需双引号标识
+        if "group" not in cols:
+            conn.execute('ALTER TABLE tasks ADD COLUMN "group" TEXT NOT NULL DEFAULT \'\'')
+            app.logger.info("已迁移：tasks 表新增 group 列")
         conn.commit()
 
 
@@ -422,7 +427,7 @@ def validate_payload(data):
     except (TypeError, ValueError):
         return None, "超时/重试次数无效"
     return dict(
-        name=name, url=url, method=method,
+        name=name, group=(data.get("group") or "").strip()[:50], url=url, method=method,
         headers=(data.get("headers") or "").strip(),
         body=data.get("body") or "",
         schedule_type=st, interval_minutes=minutes, cron_expr=expr,
@@ -469,10 +474,10 @@ def create_task():
         next_sort = int(conn.execute(
             "SELECT COALESCE(MAX(sort_order),0) m FROM tasks").fetchone()["m"] or 0) + 1
         cur = conn.execute(
-            "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
+            "INSERT INTO tasks(name,\"group\",url,method,headers,body,schedule_type,"
             "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)",
-            (fields["name"], fields["url"], fields["method"], fields["headers"],
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)",
+            (fields["name"], fields["group"], fields["url"], fields["method"], fields["headers"],
              fields["body"], fields["schedule_type"], fields["interval_minutes"],
              fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
              fields["retries"], next_sort, now, now),
@@ -517,10 +522,10 @@ def update_task(task_id):
     now = now_str()
     with closing(db()) as conn:
         cur = conn.execute(
-            "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,"
+            "UPDATE tasks SET name=?,\"group\"=?,url=?,method=?,headers=?,body=?,schedule_type=?,"
             "interval_minutes=?,cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,updated_at=?"
             " WHERE id=?",
-            (fields["name"], fields["url"], fields["method"], fields["headers"],
+            (fields["name"], fields["group"], fields["url"], fields["method"], fields["headers"],
              fields["body"], fields["schedule_type"], fields["interval_minutes"],
              fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
              fields["retries"], now, task_id),
@@ -613,10 +618,10 @@ def import_data():
             now = now_str()
             so += 1
             cur = conn.execute(
-                "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
+                "INSERT INTO tasks(name,\"group\",url,method,headers,body,schedule_type,"
                 "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (fields["name"], fields["url"], fields["method"], fields["headers"],
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (fields["name"], fields["group"], fields["url"], fields["method"], fields["headers"],
                  fields["body"], fields["schedule_type"], fields["interval_minutes"],
                  fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
                  fields["retries"], 1 if t.get("enabled", 1) else 0, so, now, now),
@@ -720,7 +725,7 @@ def gist_api_error(status):
 # 参与指纹的配置字段（顺序固定）；id / 执行统计 / 时间戳等易变字段不参与，
 # 任务跑一次不会被误判为「有修改」。ensure_ascii=False + 紧凑分隔符与 JS 序列化一致。
 CONFIG_FIELDS = [
-    "name", "url", "method", "headers", "body",
+    "name", "group", "url", "method", "headers", "body",
     "schedule_type", "interval_minutes", "cron_expr", "jitter_minutes",
     "timeout_seconds", "retries", "enabled", "sort_order",
 ]
@@ -841,20 +846,20 @@ def gist_pull_core(now, reason):
                 if hit:
                     used.add(hit["id"])
                     conn.execute(
-                        "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,"
+                        "UPDATE tasks SET name=?,\"group\"=?,url=?,method=?,headers=?,body=?,schedule_type=?,"
                         "interval_minutes=?,cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,"
                         "enabled=?,sort_order=?,updated_at=? WHERE id=?",
-                        (fields["name"], fields["url"], fields["method"], fields["headers"],
+                        (fields["name"], fields["group"], fields["url"], fields["method"], fields["headers"],
                          fields["body"], fields["schedule_type"], fields["interval_minutes"],
                          fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
                          fields["retries"], enabled, so, now_row, hit["id"]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO tasks(name,url,method,headers,body,schedule_type,"
+                        "INSERT INTO tasks(name,\"group\",url,method,headers,body,schedule_type,"
                         "interval_minutes,cron_expr,jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at)"
-                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (fields["name"], fields["url"], fields["method"], fields["headers"],
+                        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (fields["name"], fields["group"], fields["url"], fields["method"], fields["headers"],
                          fields["body"], fields["schedule_type"], fields["interval_minutes"],
                          fields["cron_expr"], fields["jitter_minutes"], fields["timeout_seconds"],
                          fields["retries"], enabled, so, now_row, now_row),

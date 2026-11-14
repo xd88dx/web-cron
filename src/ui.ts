@@ -53,6 +53,22 @@ tr:hover td{background:#fafbfd}
 .badge.browser{background:var(--purple-bg);color:var(--purple)}
 .badge.ssh{background:#ecfdf5;color:#047857}
 .badge.challenge{background:var(--red-bg);color:var(--red)}
+.filterbar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:13px;flex-wrap:wrap}
+.filterbar select,.filterbar .ftext{border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:13px;background:#fff;color:var(--txt)}
+.filterbar .ftext{width:200px}
+.filterbar .ftext:focus{outline:none;border-color:var(--blue)}
+/* 自定义分组下拉：点开为面板列表，末项内嵌输入框 + ＋ 添加 */
+.combo{position:relative}
+.combo-box{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;background:#fff;color:var(--txt);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;user-select:none}
+.combo-box:hover{border-color:var(--blue)}
+.combo-caret{color:var(--muted);font-size:11px}
+.combo-pop{position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 30px rgba(15,23,42,.18);z-index:30;max-height:220px;overflow:auto;padding:4px}
+.combo-item{padding:7px 10px;font-size:13px;border-radius:7px;cursor:pointer}
+.combo-item:hover{background:#f1f5f9}
+.combo-item.on{background:#f1f5f9;font-weight:600}
+.combo-add{display:flex;gap:6px;padding:6px 4px 4px;border-top:1px solid var(--line);margin-top:4px;position:sticky;bottom:0;background:#fff}
+.combo-add input{flex:1;border:1px solid var(--line);border-radius:7px;padding:6px 8px;font-size:13px;min-width:0}
+.combo-add input:focus{outline:none;border-color:var(--blue)}
 .muted{color:var(--muted);font-size:12px}
 .ops{display:flex;gap:6px;justify-content:flex-end}
 .empty{text-align:center;padding:48px 0;color:var(--muted)}
@@ -112,6 +128,18 @@ td .muted{margin-top:3px}
     <div class="stat"><div class="l">24h 执行次数</div><div class="v" id="stRuns">-</div></div>
   </section>
   <section class="panel">
+    <div class="filterbar hidden" id="filterBar">
+      <input id="filterText" class="ftext" placeholder="搜索名称/URL/命令" oninput="render(LASTDATA)">
+      <select id="filterMode" onchange="render(LASTDATA)">
+        <option value="">全部方式</option><option value="ssh">SSH</option><option value="http">HTTP</option><option value="browser">浏览器</option>
+      </select>
+      <select id="filterEnabled" onchange="render(LASTDATA)">
+        <option value="">全部状态</option><option value="1">运行中</option><option value="0">已暂停</option>
+      </select>
+      <select id="filterGroup" onchange="render(LASTDATA)"></select>
+      <button class="mini" onclick="resetFilter()">清空</button>
+      <span class="muted" id="filterCount"></span>
+    </div>
     <table>
       <thead><tr>
         <th style="width:76px">状态</th><th>任务</th><th style="width:88px">方式</th>
@@ -121,13 +149,29 @@ td .muted{margin-top:3px}
       <tbody id="taskBody"></tbody>
     </table>
     <div class="empty hidden" id="emptyBox"><div class="big">📭</div>还没有任务，点击右上角「新建任务」添加第一个定时访问任务</div>
+    <div class="empty hidden" id="noMatchBox"><div class="big">🔍</div>当前筛选条件下没有匹配的任务</div>
   </section>
 </main>
 
 <div class="overlay" id="editOverlay" data-dismiss="outside">
   <div class="modal">
     <h3 id="editTitle">新建任务</h3>
-    <div class="frow"><label>任务名称 *</label><input id="fName" placeholder="例：站点保活"></div>
+    <div class="grid2">
+      <div class="frow"><label>任务名称 *</label><input id="fName" placeholder="例：站点保活"></div>
+      <div class="frow"><label>所属分组</label>
+        <input type="hidden" id="fGroup">
+        <div class="combo" id="groupCombo">
+          <div class="combo-box" id="groupComboBox" onclick="groupComboToggle()"><span id="groupComboLabel">无分组</span><span class="combo-caret">▾</span></div>
+          <div class="combo-pop hidden" id="groupComboPop">
+            <div id="groupComboItems"></div>
+            <div class="combo-add">
+              <input id="groupAddInput" placeholder="自定义分组…" onkeydown="if(event.key==='Enter'){event.preventDefault();groupComboAdd();}">
+              <button type="button" class="mini" onclick="groupComboAdd()" title="添加分组">＋</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="frow"><label>访问方式 *</label>
       <select id="fMode" onchange="onModeChange()">
         <option value="http">🌐 HTTP 请求（普通站点，轻量快速）</option>
@@ -259,7 +303,58 @@ td .muted{margin-top:3px}
 <input type="file" id="importFile" accept=".json" class="hidden">
 
 <script>
-let TASKS = [], TZ = 'Asia/Shanghai', editingId = null;
+let TASKS = [], TZ = 'Asia/Shanghai', editingId = null, LASTDATA = null;
+function distinctGroups(tasks){
+  var gs=[];
+  for(var i=0;i<tasks.length;i++){ var g=tasks[i].group; if(g && gs.indexOf(g)<0) gs.push(g); }
+  return gs.sort();
+}
+// 筛选匹配文本：名称 + URL；SSH 任务附加 用户@主机:端口 与 远程命令
+function taskMatchText(t){
+  var s=(t.name||'')+' '+(t.url||'');
+  if(t.mode==='ssh') s+=' '+(t.ssh_user||'')+'@'+(t.ssh_host||'')+':'+(t.ssh_port||'')+' '+(t.ssh_command||'');
+  return s.toLowerCase();
+}
+function resetFilter(){
+  $('filterText').value=''; $('filterMode').value=''; $('filterEnabled').value=''; $('filterGroup').value='';
+  render(LASTDATA);
+}
+// 自定义分组下拉（combobox）：fGroup 为隐藏 input 存值，面板末项内嵌「输入框 + ＋」添加自定义分组
+var sessionGroups=[]; // 经 ＋ 新建、尚未随任务保存的分组（自动刷新重建选项时保留）
+function refreshGroupCombo(){
+  var v=$('fGroup').value||'';
+  var gs=distinctGroups(TASKS).slice();
+  for(var i=0;i<sessionGroups.length;i++) if(gs.indexOf(sessionGroups[i])<0) gs.push(sessionGroups[i]);
+  gs.sort();
+  $('groupComboLabel').textContent = v || '无分组';
+  var html='<div class="combo-item'+(v?'':' on')+'" data-v="" onclick="groupComboPick(this)">无分组</div>';
+  for(var i=0;i<gs.length;i++) html+='<div class="combo-item'+(gs[i]===v?' on':'')+'" data-v="'+esc(gs[i])+'" onclick="groupComboPick(this)">'+esc(gs[i])+'</div>';
+  $('groupComboItems').innerHTML=html;
+}
+function groupComboToggle(){
+  var pop=$('groupComboPop');
+  if(pop.classList.contains('hidden')){
+    refreshGroupCombo();
+    $('groupAddInput').value='';
+    pop.classList.remove('hidden');
+  }else{
+    pop.classList.add('hidden');
+  }
+}
+function groupComboPick(el){
+  $('fGroup').value = el.getAttribute('data-v');
+  refreshGroupCombo();
+  $('groupComboPop').classList.add('hidden');
+}
+function groupComboAdd(){
+  var inp=$('groupAddInput');
+  var name=(inp.value||'').trim();
+  if(!name) return;
+  if(sessionGroups.indexOf(name)<0) sessionGroups.push(name);
+  $('fGroup').value=name;
+  refreshGroupCombo();
+  $('groupComboPop').classList.add('hidden');
+}
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
 function fmt(ts){
@@ -388,7 +483,7 @@ function lastBadge(t){
   return '<span class="badge fail" title="'+esc(t.last_error||'')+'">✗ '+(t.last_status_code==null?'-':t.last_status_code)+' · '+esc(t.last_error||'失败')+'</span>';
 }
 function render(d){
-  TASKS = d.tasks; TZ = d.timezone || 'Asia/Shanghai';
+  TASKS = d.tasks; TZ = d.timezone || 'Asia/Shanghai'; LASTDATA = d;
   if(d.auth_required) $('btnLogout').classList.remove('hidden');
   var bs=$('bStatus');
   if(d.browser_available){
@@ -403,10 +498,32 @@ function render(d){
   var s=d.stats;
   $('stTasks').textContent=s.tasks; $('stEnabled').textContent=s.enabled;
   $('stRate').textContent=(s.rate24==null?'—':s.rate24+'%'); $('stRuns').textContent=s.runs24;
-  $('taskBody').innerHTML = d.tasks.map(function(t){
+  // 分组：编辑表单 datalist 选项 + 筛选栏（重建后还原当前选择）
+  var gs=distinctGroups(TASKS);
+  refreshGroupCombo();
+  var sel=$('filterGroup'), cur=sel.value;
+  var oh='<option value="">全部分组</option><option value="__none__">（无分组）</option>';
+  for(var i=0;i<gs.length;i++) oh+='<option value="'+esc(gs[i])+'">'+esc(gs[i])+'</option>';
+  sel.innerHTML=oh; sel.value=cur;
+  var fg=sel.value;
+  var ft=($('filterText').value||'').trim().toLowerCase();
+  var fm=$('filterMode').value;
+  var fe=$('filterEnabled').value;
+  var list=TASKS.filter(function(t){
+    if(ft && taskMatchText(t).indexOf(ft)<0) return false;
+    if(fm && t.mode!==fm) return false;
+    if(fe && String(t.enabled)!==fe) return false;
+    if(fg==='__none__') return !t.group;
+    if(fg && t.group!==fg) return false;
+    return true;
+  });
+  $('filterBar').classList.toggle('hidden', TASKS.length===0);
+  $('filterCount').textContent = (ft||fm||fe||fg) ? ('匹配 '+list.length+'/'+TASKS.length) : ('共 '+TASKS.length+' 个');
+  $('taskBody').innerHTML = list.map(function(t){
+    var grp=t.group?'<span class="badge idle" style="margin-left:6px">'+esc(t.group)+'</span>':'';
     return '<tr draggable="true" data-id="'+t.id+'">'+
       '<td>'+(t.enabled?'<span class="badge on">● 运行中</span>':'<span class="badge off">⏸ 已暂停</span>')+'</td>'+
-      '<td><span class="tname">'+esc(t.name)+'</span><span class="turl" title="'+esc(t.mode==='ssh'?('SSH '+t.ssh_user+'@'+t.ssh_host+':'+t.ssh_port+' → '+t.ssh_command):t.url)+'">'+(t.mode==='ssh'?esc('SSH '+t.ssh_user+'@'+t.ssh_host+':'+t.ssh_port+' → '+t.ssh_command):esc(t.method+' '+t.url))+'</span></td>'+
+      '<td><span class="tname">'+esc(t.name)+'</span>'+grp+'<span class="turl" title="'+esc(t.mode==='ssh'?('SSH '+t.ssh_user+'@'+t.ssh_host+':'+t.ssh_port+' → '+t.ssh_command):t.url)+'">'+(t.mode==='ssh'?esc('SSH '+t.ssh_user+'@'+t.ssh_host+':'+t.ssh_port+' → '+t.ssh_command):esc(t.method+' '+t.url))+'</span></td>'+
       '<td>'+modeBadge(t)+'</td>'+
       '<td>'+esc(schedText(t))+(t.retries>0?'<div class="muted">失败重试 '+t.retries+' 次</div>':'')+(t.jitter_minutes>0?'<div class="muted">+ 随机 0~'+t.jitter_minutes+' 分钟</div>':'')+'</td>'+
       '<td>'+lastBadge(t)+'<div class="muted">'+esc(fmt(t.last_run_at))+'</div>'+(t.last_challenge?'<span class="badge challenge">挑战页</span>':'')+'</td>'+
@@ -419,7 +536,8 @@ function render(d){
         '<button class="icon danger" title="删除" onclick="delTask('+t.id+')">'+svgIcon('del')+'</button>'+
       '</div></td></tr>';
   }).join('');
-  $('emptyBox').classList.toggle('hidden', d.tasks.length>0);
+  $('emptyBox').classList.toggle('hidden', TASKS.length>0);
+  $('noMatchBox').classList.toggle('hidden', !(TASKS.length>0 && list.length===0));
 }
 var LAST=null, dragBusy=false;
 async function load(){
@@ -497,7 +615,7 @@ function taskById(id){ return TASKS.find(function(t){return t.id===id;}) || {}; 
 function openEdit(id){
   editingId=id; $('editErr').textContent=''; $('editTitle').textContent=id?'编辑任务':'新建任务';
   var t=taskById(id);
-  $('fName').value=t.name||''; $('fUrl').value=t.url||''; $('fMethod').value=t.method||'GET';
+  $('fName').value=t.name||''; $('fGroup').value=t.group||''; refreshGroupCombo(); $('fUrl').value=t.url||''; $('fMethod').value=t.method||'GET';
   $('fTimeout').value=t.timeout_seconds==null?30:t.timeout_seconds;
   $('fRetries').value=t.retries==null?0:t.retries;
   $('fStype').value=t.schedule_type||'interval';
@@ -546,7 +664,7 @@ function tryCloseEdit(){
 }
 function closeEdit(){ $('editOverlay').classList.remove('show'); editingId=null; editSnapshot=null; }
 function save(){
-  var payload={ name:$('fName').value, url:$('fUrl').value, method:$('fMethod').value,
+  var payload={ name:$('fName').value, group:$('fGroup').value, url:$('fUrl').value, method:$('fMethod').value,
     timeout_seconds:+$('fTimeout').value, retries:+$('fRetries').value,
     schedule_type:$('fStype').value, interval_minutes:+$('fInterval').value,
     jitter_minutes:+$('fJitter').value||0,
@@ -625,6 +743,11 @@ async function doExport(){
   }catch(e){ toast('导出失败: '+e.message); }
 }
 $('btnSave').onclick=save;
+// 分组下拉面板：点击面板外自动收起
+document.addEventListener('click', function(e){
+  var pop=$('groupComboPop');
+  if(pop && !pop.classList.contains('hidden') && !$('groupCombo').contains(e.target)) pop.classList.add('hidden');
+});
 $('btnNew').onclick=function(){openEdit(null);};
 $('btnLogout').onclick=function(){ localStorage.removeItem('cw_pwd'); location.reload(); };
 $('btnExport').onclick=doExport;

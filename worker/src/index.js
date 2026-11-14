@@ -7,9 +7,9 @@ import { HTML } from "./ui.js";
 
 const HISTORY_KEEP = 200;
 
-// 旧库平滑迁移：tasks 缺 sort_order / jitter_minutes 列时自动补上，settings 表不存在时
+// 旧库平滑迁移：tasks 缺 sort_order / jitter_minutes / "group" 列时自动补上，settings 表不存在时
 // 自动创建（列/表已存在时报错被忽略）。新装库由 schema.sql 直接建好；
-// 已有部署首个请求/第一次调度时自动完成迁移。
+// 已有部署首个请求/第一次调度时自动完成迁移。group 是 SQL 关键字，需双引号标识。
 let schemaReady = null;
 function ensureSchema(env) {
   if (!schemaReady) {
@@ -19,6 +19,9 @@ function ensureSchema(env) {
       ).run().catch(() => {}),
       env.DB.prepare(
         "ALTER TABLE tasks ADD COLUMN jitter_minutes INTEGER NOT NULL DEFAULT 0"
+      ).run().catch(() => {}),
+      env.DB.prepare(
+        `ALTER TABLE tasks ADD COLUMN "group" TEXT NOT NULL DEFAULT ''`
       ).run().catch(() => {}),
       env.DB.prepare(
         "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -78,9 +81,9 @@ function validate(data) {
   const timeout_seconds = Math.min(120, Math.max(1, parseInt(data.timeout_seconds, 10) || 30));
   const retries = Math.min(5, Math.max(0, parseInt(data.retries, 10) || 0));
   const jitter_minutes = Math.min(1440, Math.max(0, parseInt(data.jitter_minutes, 10) || 0));
-  return {
-    name, url, method,
-    headers: String(data.headers || ""),
+    return {
+      name, group: String(data.group || "").trim().slice(0, 50), url, method,
+      headers: String(data.headers || ""),
     body: String(data.body || ""),
     schedule_type: st, interval_minutes, cron_expr, jitter_minutes, timeout_seconds, retries,
   };
@@ -168,7 +171,7 @@ async function gistError(r) {
 // ------------------------------------------------------------------ 配置指纹
 // 参与指纹的配置字段（顺序固定）；id / 执行统计 / 时间戳等易变字段不参与。
 const CONFIG_FIELDS = [
-  "name", "url", "method", "headers", "body",
+  "name", "group", "url", "method", "headers", "body",
   "schedule_type", "interval_minutes", "cron_expr", "jitter_minutes",
   "timeout_seconds", "retries", "enabled", "sort_order",
 ];
@@ -281,16 +284,16 @@ async function gistPullCore(env, now, reason) {
       used.add(hit.id);
       keptIds.push(hit.id);
       stmts.push(env.DB.prepare(
-        "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,interval_minutes=?," +
+        "UPDATE tasks SET name=?,\"group\"=?,url=?,method=?,headers=?,body=?,schedule_type=?,interval_minutes=?," +
         "cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,enabled=?,sort_order=?,updated_at=?,next_run_at=? WHERE id=?"
-      ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+      ).bind(f.name, f.group, f.url, f.method, f.headers, f.body, f.schedule_type,
              f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
              enabled, so, now, next, hit.id));
     } else {
       stmts.push(env.DB.prepare(
-        "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
-        "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-      ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+        "INSERT INTO tasks(name,\"group\",url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
+        "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      ).bind(f.name, f.group, f.url, f.method, f.headers, f.body, f.schedule_type,
              f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
              enabled, so, now, now, next));
     }
@@ -546,9 +549,9 @@ async function handleApi(req, env, url, ctx) {
     const next = computeNextRun(f, now, tz(env));
     const mr = await env.DB.prepare("SELECT COALESCE(MAX(sort_order),0) m FROM tasks").first();
     const ins = await env.DB.prepare(
-      "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
+      "INSERT INTO tasks(name,\"group\",url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
       "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)"
-    ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+    ).bind(f.name, f.group, f.url, f.method, f.headers, f.body, f.schedule_type,
            f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
            Number(mr?.m || 0) + 1, now, now, next).run();
     syncLater();
@@ -587,9 +590,9 @@ async function handleApi(req, env, url, ctx) {
       const now = Date.now();
       const next = computeNextRun(f, now, tz(env));
       await env.DB.prepare(
-        "UPDATE tasks SET name=?,url=?,method=?,headers=?,body=?,schedule_type=?,interval_minutes=?," +
+        "UPDATE tasks SET name=?,\"group\"=?,url=?,method=?,headers=?,body=?,schedule_type=?,interval_minutes=?," +
         "cron_expr=?,jitter_minutes=?,timeout_seconds=?,retries=?,updated_at=?,next_run_at=? WHERE id=?"
-      ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+      ).bind(f.name, f.group, f.url, f.method, f.headers, f.body, f.schedule_type,
              f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
              now, next, id).run();
       syncLater();
@@ -654,9 +657,9 @@ async function handleApi(req, env, url, ctx) {
       const enabled = t.enabled === 0 ? 0 : 1;
       so += 1;
       await env.DB.prepare(
-        "INSERT INTO tasks(name,url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
-        "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
-      ).bind(f.name, f.url, f.method, f.headers, f.body, f.schedule_type,
+        "INSERT INTO tasks(name,\"group\",url,method,headers,body,schedule_type,interval_minutes,cron_expr," +
+        "jitter_minutes,timeout_seconds,retries,enabled,sort_order,created_at,updated_at,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+      ).bind(f.name, f.group, f.url, f.method, f.headers, f.body, f.schedule_type,
              f.interval_minutes, f.cron_expr, f.jitter_minutes, f.timeout_seconds, f.retries,
              enabled, so, now, now, next).run();
       imported++;

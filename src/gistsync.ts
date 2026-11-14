@@ -25,7 +25,7 @@ const GITHUB_TIMEOUT_MS = 15000;
 
 // 参与指纹的配置字段（顺序固定，三版语义一致；各版本可按自身字段增删，只需自洽）
 const CONFIG_FIELDS = [
-  "name", "url", "method", "headers", "body",
+  "name", "group", "url", "method", "headers", "body",
   "schedule_type", "interval_minutes", "cron_expr", "jitter_minutes",
   "timeout_seconds", "retries", "enabled", "sort_order",
   "mode", "browser_wait_until", "browser_wait_selector", "browser_assert",

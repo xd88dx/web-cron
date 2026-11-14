@@ -7,7 +7,7 @@ const WAIT_UNTILS: WaitUntil[] = ["commit", "domcontentloaded", "load", "network
 
 export type TaskFields = Pick<
   Task,
-  | "name" | "url" | "method" | "headers" | "body"
+  | "name" | "group" | "url" | "method" | "headers" | "body"
   | "schedule_type" | "interval_minutes" | "cron_expr" | "jitter_minutes"
   | "timeout_seconds" | "retries" | "mode"
   | "ssh_host" | "ssh_port" | "ssh_user" | "ssh_command"
@@ -70,7 +70,7 @@ export function validateTask(data: any): TaskFields {
   }
 
   return {
-    name, url, method,
+    name, group: String(d.group || "").trim().slice(0, 50), url, method,
     headers: String(d.headers || ""),
     body: String(d.body || ""),
     schedule_type, interval_minutes, cron_expr,

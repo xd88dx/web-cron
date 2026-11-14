@@ -39,6 +39,7 @@ export function normalizeGist(raw: any): GistConfig {
 export function taskDefaults(): Omit<Task, "id" | "name" | "url"> {
   return {
     method: "GET", headers: "", body: "",
+    group: "",
     schedule_type: "interval", interval_minutes: 5, cron_expr: null,
     jitter_minutes: 0,
     timeout_seconds: 30, retries: 0, enabled: 1,

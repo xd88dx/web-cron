@@ -208,7 +208,7 @@ t("shouldFallback 只对反爬信号触发", () => {
 console.log("== Gist 同步配置指纹 ==");
 function cfg(over) {
   return Object.assign({
-    name: "保活", url: "https://example.com/", method: "GET", headers: "", body: "",
+    name: "保活", group: "", url: "https://example.com/", method: "GET", headers: "", body: "",
     schedule_type: "interval", interval_minutes: 5, cron_expr: null, jitter_minutes: 3,
     timeout_seconds: 30, retries: 0, enabled: 1, sort_order: 1,
     mode: "http",
@@ -251,6 +251,12 @@ t("指纹：SSH 字段变化（主机/密码）会改变", () => {
   const base = configHash([cfg({ id: 1 })]);
   assert.notEqual(base, configHash([cfg({ id: 1, ssh_host: "h2.example.com" })]));
   assert.notEqual(base, configHash([cfg({ id: 1, ssh_password: "p2" })]));
+});
+t("指纹：分组变化会改变；Gist 侧缺 group 字段规范化后与本地空分组一致", () => {
+  const base = configHash([cfg({ id: 1 })]);
+  assert.notEqual(base, configHash([cfg({ id: 1, group: "服务器" })]));
+  // 旧版对端推回的任务 JSON 无 group 字段 → 规范化后 group=""，与本地无分组任务一致
+  assert.equal(hashLikeLocal([cfg({ id: 9 })]), configHash([cfg({ id: 1 })]));
 });
 function keyCfg(over) {
   return Object.assign({ id: 1, name: "my-server", private_key: "-----BEGIN X-----\nAAA\n-----END X-----",

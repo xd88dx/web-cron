@@ -46,7 +46,8 @@ tr:hover td{background:#fafbfd}
 .badge.on{background:var(--green-bg);color:var(--green)}
 .badge.off{background:var(--gray-bg);color:var(--muted)}
 .badge.ok{background:var(--green-bg);color:var(--green)}
-.badge.fail{background:var(--red-bg);color:var(--red)}
+/* 失败徽章可能是长错误串（含不可断行 URL），限宽防撑爆表格把右侧列挤出面板；全文在 title 悬浮可见 */
+.badge.fail{background:var(--red-bg);color:var(--red);max-width:180px;overflow:hidden;text-overflow:ellipsis}
 .badge.idle{background:var(--gray-bg);color:var(--muted)}
 .badge.http{background:#eff6ff;color:#1d4ed8}
 .badge.browser{background:var(--purple-bg);color:var(--purple)}

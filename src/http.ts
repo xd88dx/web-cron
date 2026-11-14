@@ -1,6 +1,7 @@
 // http.ts —— 纯 HTTP 执行（普通站点走这条），以及挑战页 / fallback 判定
 import { browserHeaders, pickUa } from "./headers.js";
 import { parseHeaders } from "./validate.js";
+import { gateSleepError } from "./blitzgate.js";
 import type { Task, ExecResult } from "./types.js";
 
 const CHALLENGE_MARKERS = [
@@ -60,7 +61,11 @@ export async function doHttp(task: Task): Promise<ExecResult> {
     r.challenge = looksLikeChallenge(r.snippet) || looksLikeChallenge(r.page_title);
     const codeOk = resp.status >= 200 && resp.status < 400;
     r.ok = codeOk && !r.challenge;
-    if (!r.ok) r.error = r.challenge ? "疑似反爬挑战页" : "HTTP " + resp.status;
+    if (!r.ok) {
+      // blitz 平台特例：休眠网关对程序请求回 503 JSON，明确提示而不是笼统的 HTTP 503
+      const gateMsg = gateSleepError(resp.headers.get("x-blitz-gate"), resp.status);
+      r.error = gateMsg || (r.challenge ? "疑似反爬挑战页" : "HTTP " + resp.status);
+    }
   } catch (e: any) {
     r.error = e?.name === "AbortError" ? "timeout" : String(e?.message || e);
   } finally {

@@ -10,6 +10,7 @@ import { browserIdentity, chromiumMajorVersion, uaDataInitScript } from "./heade
 import { parseHeaders } from "./validate.js";
 import { profilesDir, screenshotsDir } from "./store.js";
 import { looksLikeChallenge } from "./http.js";
+import * as blitzgate from "./blitzgate.js";
 import type { Task, ExecResult } from "./types.js";
 
 export interface BrowserState {
@@ -226,13 +227,30 @@ export async function executeBrowser(task: Task): Promise<ExecResult> {
     page.setDefaultTimeout(timeoutMs);
 
     let gotoError = "";
+    let gateHeader = "";   // blitz 休眠网关标记（x-blitz-gate），普通站点恒为空
     try {
       const resp = await page.goto(task.url, {
         waitUntil: task.browser_wait_until, timeout: timeoutMs,
       });
       r.status_code = resp ? resp.status() : null;
+      if (resp) gateHeader = String(resp.headers()["x-blitz-gate"] || "");
     } catch (e: any) {
       gotoError = e?.name === "TimeoutError" ? "timeout" : String(e?.message || e).slice(0, 200);
+    }
+
+    // blitz.cloud 平台特例：休眠应用对程序请求不可唤醒，浏览器请求会拿到带
+    // 「Wake it up」表单的休眠页，需提交表单网关才拉起应用（详见 blitzgate.ts）。
+    // BROWSER_WAKE_GATE=0 关闭；判定条件极窄，不影响其它站点。
+    if (blitzgate.gateEnabled() && !gotoError &&
+        await blitzgate.isGateSleepPage(page, r.status_code, gateHeader)) {
+      if (await blitzgate.wake(page, task, r)) {
+        try {
+          const resp2 = await page.reload({
+            waitUntil: task.browser_wait_until || "domcontentloaded", timeout: timeoutMs,
+          });
+          r.status_code = resp2 ? resp2.status() : null;
+        } catch { /* 唤醒成功但 reload 失败：带着当前页面继续判定 */ }
+      }
     }
 
     if (task.browser_wait_selector) {

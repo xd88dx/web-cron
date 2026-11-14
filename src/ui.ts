@@ -67,6 +67,8 @@ tr:hover td{background:#fafbfd}
 .frow input:disabled,.frow select:disabled,.frow textarea:read-only{background:var(--gray-bg);color:var(--muted);cursor:not-allowed}
 .frow input[type=checkbox]{width:auto;margin-right:6px}
 .checkline{display:flex;align-items:center;font-size:13px;gap:2px}
+/* .frow label 的 display:block 优先级(0,1,1)更高会压掉 .checkline 的 flex，这里提级保勾选框垂直居中 */
+.frow .checkline{display:flex;align-items:center}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 .fieldset{border:1px dashed var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:#fcfcff}

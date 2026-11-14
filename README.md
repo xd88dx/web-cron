@@ -31,7 +31,7 @@
 - **双模式**（每个任务独立配置）：
   - `🌐 HTTP`：Node fetch + 固定真实浏览器 UA + 完整浏览器头（Accept-Language / sec-ch-ua 版本对齐 / Sec-Fetch-*）
   - `🧭 浏览器仿真`：真实 headless Chromium，执行 JS、渲染 DOM、加载子资源、跟随重定向、自动 Cookie
-  - `🖥 SSH 命令`：定时在远程服务器执行一条命令（保活 / 远程触发），密码或私钥认证，详见下方「SSH 命令任务」
+  - `🖥️ SSH 命令`：定时在远程服务器执行一条命令（保活 / 远程触发），密码或私钥认证，详见下方「SSH 命令任务」
 - **自动升级**：HTTP 模式任务开启开关后，遇 403 / 429 / 503 / 挑战页时自动用浏览器重试一次
 - **自动降级**：环境无 Chromium 时，浏览器模式任务自动按 HTTP 执行并在面板与日志中标注 `已降级`
 - 拟人化：UA 按任务固定（不再逐次随机）、`navigator.webdriver` 抹除、viewport/locale/timezone/dpr、每任务独立 `storageState` 持久化（跨次访问表现为回头客）、可选停留与滚动
@@ -188,7 +188,7 @@ Client Hints 会被置空（Chromium 无法真正删除该头），`navigator.us
 > 且 UA 中不含 `HeadlessChrome`。bot.sannysoft.com 渲染后 `WebDriver (New)` / `WebDriver Advanced`
 > 均为 passed，`Plugins` / `Permissions` / `HEADCHR_*` 检测通过。
 
-## SSH 命令任务（🖥 SSH 模式，Node 主线独有）
+## SSH 命令任务（🖥️ SSH 模式，Node 主线独有）
 
 定时在远程服务器执行一条命令（如保活 `true`、触发脚本），基于 `ssh2` 纯 JS 库，Windows/Linux 行为一致。
 

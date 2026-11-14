@@ -12,7 +12,7 @@ export function resolveSshAuth(task: Task, keys: SshKey[]): ResolvedAuth {
   if (task.ssh_auth === "key") {
     const k = keys.find((x) => x.name === task.ssh_key_name);
     if (!k) {
-      throw new Error(`密钥不存在：${task.ssh_key_name}（请在本机「SSH 密钥」管理中添加同名密钥）`);
+      throw new Error(`密钥不存在：${task.ssh_key_name}（请在「管理密钥」中添加同名密钥）`);
     }
     return { kind: "key", privateKey: k.private_key, passphrase: k.passphrase };
   }

@@ -41,7 +41,7 @@ export function validateTask(data: any): TaskFields {
     if (!ssh_user) throw new Error("SSH 用户名不能为空");
     if (!ssh_command) throw new Error("SSH 命令不能为空");
     if (ssh_auth === "key" && !String(d.ssh_key_name || "").trim()) {
-      throw new Error("密钥方式需选择一把密钥");
+      throw new Error("密钥方式需选择密钥");
     }
     url = `ssh://${ssh_user}@${ssh_host}:${ssh_port}`;
   } else {
